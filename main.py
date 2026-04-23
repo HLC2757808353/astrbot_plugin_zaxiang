@@ -50,18 +50,19 @@ class ZaxiangPlugin(Star):
             return
         
         messages = event.get_messages()
+        bot_id = event.message_obj.self_id
         target_id = None
         target_name = ""
         
-        for msg in messages:
-            if isinstance(msg, At):
-                target_id = msg.qq
-                target_name = f"用户{target_id}"
-                break
+        all_ats = [msg for msg in messages if isinstance(msg, At)]
+        target_ats = [msg for msg in all_ats if str(msg.qq) != str(bot_id)]
         
-        if not target_id:
+        if len(target_ats) == 0:
             yield event.plain_result("你要我冷暴力谁啊？@一下对方")
             return
+        else:
+            target_id = target_ats[0].qq
+            target_name = f"用户{target_id}"
         
         if self.cold_violence_mgr.is_whitelisted(target_id):
             yield event.plain_result("可惜捏,你莫得权限")
@@ -81,18 +82,19 @@ class ZaxiangPlugin(Star):
             return
         
         messages = event.get_messages()
+        bot_id = event.message_obj.self_id
         target_id = None
         target_name = ""
         
-        for msg in messages:
-            if isinstance(msg, At):
-                target_id = msg.qq
-                target_name = f"用户{target_id}"
-                break
+        all_ats = [msg for msg in messages if isinstance(msg, At)]
+        target_ats = [msg for msg in all_ats if str(msg.qq) != str(bot_id)]
         
-        if not target_id:
+        if len(target_ats) == 0:
             yield event.plain_result("你不@对方我怎么知道是谁？")
             return
+        else:
+            target_id = target_ats[0].qq
+            target_name = f"用户{target_id}"
         
         if self.cold_violence_mgr.remove_cold_violence(target_id):
             yield event.plain_result(f"已解除 {target_name} 的冷暴力")

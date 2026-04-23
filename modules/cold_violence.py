@@ -41,10 +41,9 @@ class ColdViolenceManager:
         self._cleanup_task: Optional[asyncio.Task] = None
     
     def initialize(self, config: Dict):
-        logger.info(f"冷暴力管理器收到的原始配置: {config}")
         cold_violence_config = config.get('cold_violence', config)
         self.config = {**self.DEFAULT_CONFIG, **cold_violence_config}
-        logger.info(f"冷暴力管理器初始化完成，最终配置: {self.config}")
+        logger.info(f"冷暴力管理器初始化完成")
     
     async def start_cleanup_task(self):
         if self._cleanup_task is None or self._cleanup_task.done():
