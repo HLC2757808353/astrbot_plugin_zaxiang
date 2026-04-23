@@ -75,7 +75,10 @@ class ColdViolenceManager:
     
     def has_authority(self, user_id: str) -> bool:
         authority_ids = self.config.get('authority_ids', [])
-        return str(user_id) in [str(uid) for uid in authority_ids]
+        logger.info(f"权限检查 - 用户ID: {user_id}, 权限列表: {authority_ids}")
+        result = str(user_id) in [str(uid) for uid in authority_ids]
+        logger.info(f"权限检查结果: {result}")
+        return result
     
     def is_whitelisted(self, user_id: str) -> bool:
         whitelist_ids = self.config.get('whitelist_ids', [])

@@ -40,6 +40,7 @@ class ZaxiangPlugin(Star):
     @filter.command("冷暴力")
     async def cold_violence_cmd(self, event: AstrMessageEvent, target: str = ""):
         sender_id = event.get_sender_id()
+        logger.info(f"冷暴力指令 - 发送者ID: {sender_id}")
         
         if not self.cold_violence_mgr.has_authority(sender_id):
             yield event.plain_result("你没有权限,笨蛋")
