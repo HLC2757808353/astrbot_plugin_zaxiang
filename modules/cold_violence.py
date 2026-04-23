@@ -28,13 +28,21 @@ class ColdViolenceRecord:
 
 
 class ColdViolenceManager:
+    DEFAULT_CONFIG = {
+        'enabled': True,
+        'authority_ids': [],
+        'whitelist_ids': [],
+        'default_duration': 30
+    }
+    
     def __init__(self):
         self.cold_violence_records: Dict[str, ColdViolenceRecord] = {}
-        self.config: Dict = {}
+        self.config: Dict = self.DEFAULT_CONFIG.copy()
         self._cleanup_task: Optional[asyncio.Task] = None
     
     def initialize(self, config: Dict):
-        self.config = config.get('cold_violence', {})
+        cold_violence_config = config.get('cold_violence', {})
+        self.config = {**self.DEFAULT_CONFIG, **cold_violence_config}
         logger.info(f"冷暴力管理器初始化完成，配置: {self.config}")
     
     async def start_cleanup_task(self):
@@ -75,14 +83,13 @@ class ColdViolenceManager:
     
     def has_authority(self, user_id: str) -> bool:
         authority_ids = self.config.get('authority_ids', [])
-        logger.info(f"权限检查 - 用户ID: {user_id}, 权限列表: {authority_ids}")
-        result = str(user_id) in [str(uid) for uid in authority_ids]
-        logger.info(f"权限检查结果: {result}")
-        return result
+        return str(user_id) in [str(uid) for uid in authority_ids]
     
     def is_whitelisted(self, user_id: str) -> bool:
         whitelist_ids = self.config.get('whitelist_ids', [])
-        return str(user_id) in [str(uid) for uid in whitelist_ids]
+        authority_ids = self.config.get('authority_ids', [])
+        all_protected = list(whitelist_ids) + list(authority_ids)
+        return str(user_id) in [str(uid) for uid in all_protected]
     
     def is_under_cold_violence(self, user_id: str) -> bool:
         user_id_str = str(user_id)
