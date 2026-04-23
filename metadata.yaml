@@ -1,6 +1,6 @@
 name: astrbot_plugin_zaxiang # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
 display_name: 引灯续昼插件 # 用于展示的名字，可以是方便人类阅读的名字（需要版本 >= v4.5.0，低版本不会报错，请放心填写）
 desc: 引灯续昼插件，私用插件 # 插件简短描述
-version: v0.0.7 # 插件版本号。
+version: v0.0.8 # 插件版本号。
 author: 引灯续昼 # 作者
 repo: https://github.com/HLC2757808353/astrbot_plugin_zaxiang # 插件的仓库地址
