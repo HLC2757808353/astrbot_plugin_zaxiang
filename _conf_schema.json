@@ -1,0 +1,33 @@
+{
+  "cold_violence": {
+    "description": "冷暴力功能配置",
+    "type": "object",
+    "hint": "AI冷暴力功能，防止被骚扰",
+    "items": {
+      "enabled": {
+        "description": "是否启用冷暴力功能",
+        "type": "bool",
+        "default": true,
+        "hint": "启用后AI可以冷暴力骚扰者"
+      },
+      "authority_ids": {
+        "description": "权限ID列表",
+        "type": "list",
+        "default": [],
+        "hint": "在此列表中的用户可以执行冷暴力和解除冷暴力指令"
+      },
+      "whitelist_ids": {
+        "description": "白名单ID列表",
+        "type": "list",
+        "default": [],
+        "hint": "在此列表中的用户不能被冷暴力"
+      },
+      "default_duration": {
+        "description": "默认冷暴力时长（分钟）",
+        "type": "int",
+        "default": 30,
+        "hint": "默认的冷暴力持续时间"
+      }
+    }
+  }
+}
