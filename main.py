@@ -42,7 +42,7 @@ class ZaxiangPlugin(Star):
         sender_id = event.get_sender_id()
         
         if not self.cold_violence_mgr.has_authority(sender_id):
-            yield event.plain_result("你没有权限笨蛋")
+            yield event.plain_result("你没有权限,笨蛋")
             return
         
         if not self.cold_violence_mgr.is_enabled():
@@ -60,11 +60,11 @@ class ZaxiangPlugin(Star):
                 break
         
         if not target_id:
-            yield event.plain_result("请@要冷暴力的对象")
+            yield event.plain_result("你要我冷暴力谁啊？@一下对方")
             return
         
         if self.cold_violence_mgr.is_whitelisted(target_id):
-            yield event.plain_result("该用户在白名单中，无法冷暴力")
+            yield event.plain_result("可惜捏,你莫得权限")
             return
         
         if self.cold_violence_mgr.add_cold_violence(target_id, target_name):
@@ -77,7 +77,7 @@ class ZaxiangPlugin(Star):
         sender_id = event.get_sender_id()
         
         if not self.cold_violence_mgr.has_authority(sender_id):
-            yield event.plain_result("你没有权限笨蛋")
+            yield event.plain_result("你没有权限,笨蛋")
             return
         
         messages = event.get_messages()
@@ -91,20 +91,20 @@ class ZaxiangPlugin(Star):
                 break
         
         if not target_id:
-            yield event.plain_result("请@要解除冷暴力的对象")
+            yield event.plain_result("你不@对方我怎么知道是谁？")
             return
         
         if self.cold_violence_mgr.remove_cold_violence(target_id):
             yield event.plain_result(f"已解除 {target_name} 的冷暴力")
         else:
-            yield event.plain_result("该用户未被冷暴力")
+            yield event.plain_result("又在造谣我冷暴力了昂，我现在没有冷暴力他捏")
     
     @filter.command("冷暴力列表")
     async def list_cold_violence_cmd(self, event: AstrMessageEvent):
         sender_id = event.get_sender_id()
         
         if not self.cold_violence_mgr.has_authority(sender_id):
-            yield event.plain_result("你没有权限笨蛋")
+            yield event.plain_result("你没有权限,笨蛋")
             return
         
         records = self.cold_violence_mgr.get_all_cold_violence_users()
@@ -121,13 +121,13 @@ class ZaxiangPlugin(Star):
         yield event.plain_result(result.strip())
     
     @filter.llm_tool(name="cold_violence_user")
-    async def cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str, duration: int = 30) -> MessageEventResult:
+    async def cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str, duration: int = 10) -> MessageEventResult:
         '''对指定用户实施冷暴力。
 
         Args:
             user_id(string): 用户ID
             user_name(string): 用户名称
-            duration(number): 冷暴力时长（分钟），默认30分钟
+            duration(number): 冷暴力时长（分钟），默认10分钟
         '''
         if not self.cold_violence_mgr.is_enabled():
             yield event.plain_result("冷暴力功能未启用")
@@ -176,7 +176,7 @@ class ZaxiangPlugin(Star):
             if record:
                 remaining = self.cold_violence_mgr.format_remaining_time(record.remaining_time)
                 yield event.plain_result(
-                    f"{user_name} 正在被冷暴力，剩余时间 {remaining}"
+                    f"正在对{user_name}冷暴力 ，解冻时间 {remaining}"
                 )
         else:
             yield event.plain_result(f"{user_name} 未被冷暴力")
