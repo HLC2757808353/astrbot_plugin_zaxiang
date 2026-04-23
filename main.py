@@ -7,15 +7,15 @@ from .modules import ColdViolenceManager
 
 @register("astrbot_plugin_zaxiang", "引灯续昼", "引灯续昼杂项插件", "1.0.0")
 class ZaxiangPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.cold_violence_mgr = ColdViolenceManager()
+        self.config = config or {}
     
     async def initialize(self):
-        config = self.context.get_config()
-        self.cold_violence_mgr.initialize(config)
+        self.cold_violence_mgr.initialize(self.config)
         await self.cold_violence_mgr.start_cleanup_task()
-        logger.info("引灯续昼杂项插件初始化完成")
+        logger.info(f"引灯续昼杂项插件初始化完成，配置: {self.config}")
     
     async def terminate(self):
         await self.cold_violence_mgr.stop_cleanup_task()
