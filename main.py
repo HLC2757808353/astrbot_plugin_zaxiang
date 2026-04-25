@@ -138,7 +138,7 @@ class ZaxiangPlugin(Star):
     
     @filter.llm_tool(name="cold_violence_user")
     async def cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str, duration: int = 10) -> MessageEventResult:
-        '''对指定用户实施冷暴力。
+        '''对指定用户实施冷暴力（AI不回复，不是群禁言）。
 
         Args:
             user_id(string): 用户ID
@@ -160,7 +160,7 @@ class ZaxiangPlugin(Star):
     
     @filter.llm_tool(name="remove_cold_violence_user")
     async def remove_cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str) -> MessageEventResult:
-        '''解除指定用户的冷暴力。
+        '''解除指定用户的冷暴力（不是解除群禁言）。
 
         Args:
             user_id(string): 用户ID
@@ -177,7 +177,7 @@ class ZaxiangPlugin(Star):
     
     @filter.llm_tool(name="check_cold_violence_status")
     async def check_cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str) -> MessageEventResult:
-        '''检查指定用户是否被冷暴力。
+        '''检查指定用户是否被冷暴力（不是检查群禁言状态）。
 
         Args:
             user_id(string): 用户ID
