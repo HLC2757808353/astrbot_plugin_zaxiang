@@ -138,12 +138,12 @@ class ZaxiangPlugin(Star):
     
     @filter.llm_tool(name="cold_violence_user")
     async def cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str, duration: int = 10) -> MessageEventResult:
-        '''对指定用户实施冷暴力（AI不回复，不是群禁言）。
+        '''冷暴力：AI对骚扰者实施冷处理，期间AI拒绝回复该用户任何消息。注意：这不是群禁言，被冷暴力的用户仍可在群里正常发言，只是AI不会理他。
 
         Args:
-            user_id(string): 用户ID
-            user_name(string): 用户名称
-            duration(number): 冷暴力时长（分钟），默认10分钟
+            user_id(string): 要冷暴力的用户ID
+            user_name(string): 要冷暴力的用户名称
+            duration(number): 冷暴力持续时长（分钟），默认10分钟
         '''
         if not self.cold_violence_mgr.is_enabled():
             yield event.plain_result("冷暴力功能未启用")
@@ -160,11 +160,11 @@ class ZaxiangPlugin(Star):
     
     @filter.llm_tool(name="remove_cold_violence_user")
     async def remove_cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str) -> MessageEventResult:
-        '''解除指定用户的冷暴力（不是解除群禁言）。
+        '''解除冷暴力：恢复AI对指定用户的正常回复。注意：这不是解除群禁言，冷暴力只是AI不理他，解除后AI会重新回复他。
 
         Args:
-            user_id(string): 用户ID
-            user_name(string): 用户名称
+            user_id(string): 要解除冷暴力的用户ID
+            user_name(string): 要解除冷暴力的用户名称
         '''
         if not self.cold_violence_mgr.is_enabled():
             yield event.plain_result("冷暴力功能未启用")
@@ -177,11 +177,11 @@ class ZaxiangPlugin(Star):
     
     @filter.llm_tool(name="check_cold_violence_status")
     async def check_cold_violence_tool(self, event: AstrMessageEvent, user_id: str, user_name: str) -> MessageEventResult:
-        '''检查指定用户是否被冷暴力（不是检查群禁言状态）。
+        '''查询冷暴力状态：查看指定用户是否正在被AI冷暴力及剩余时间。注意：冷暴力是AI不理他，不是群禁言。
 
         Args:
-            user_id(string): 用户ID
-            user_name(string): 用户名称
+            user_id(string): 要查询的用户ID
+            user_name(string): 要查询的用户名称
         '''
         if not self.cold_violence_mgr.is_enabled():
             yield event.plain_result("冷暴力功能未启用")
