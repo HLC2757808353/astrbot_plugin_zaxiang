@@ -29,5 +29,18 @@
         "hint": "默认的冷暴力持续时间"
       }
     }
+  },
+  "mute_tracker": {
+    "description": "禁言追踪配置",
+    "type": "object",
+    "hint": "追踪AI被禁言的情况，解禁后告知被谁禁言的",
+    "items": {
+      "enabled": {
+        "description": "是否启用禁言追踪",
+        "type": "bool",
+        "default": true,
+        "hint": "启用后AI被禁言解禁时会告知是谁禁言的"
+      }
+    }
   }
 }
