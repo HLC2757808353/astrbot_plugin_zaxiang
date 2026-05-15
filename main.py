@@ -57,7 +57,7 @@ class ZaxiangPlugin(Star):
                 if isinstance(event, AiocqhttpMessageEvent):
                     try:
                         await event.bot.api.call_action(
-                            'send_group_poke',
+                            'send_poke',
                             group_id=int(poke_result['group_id']),
                             user_id=int(poke_result['target_id']),
                         )
