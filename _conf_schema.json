@@ -46,19 +46,25 @@
   "poke_reaction": {
     "description": "戳一戳反应配置",
     "type": "object",
-    "hint": "AI被戳一戳时有概率反戳回去",
+    "hint": "AI被戳时有概率反戳，别人互戳时AI也有概率跟戳",
     "items": {
       "enabled": {
         "description": "是否启用戳一戳反应",
         "type": "bool",
         "default": true,
-        "hint": "启用后被戳有概率反戳"
+        "hint": "总开关，关闭后不响应任何戳一戳"
       },
-      "probability": {
+      "back_probability": {
         "description": "反戳概率",
         "type": "float",
         "default": 0.5,
-        "hint": "被戳时反戳的概率，0~1之间，0.5即50%概率"
+        "hint": "被戳时反戳回去的概率，0~1，默认0.5"
+      },
+      "follow_probability": {
+        "description": "跟戳概率",
+        "type": "float",
+        "default": 0.3,
+        "hint": "别人互戳时AI跟戳同一人的概率，0~1，默认0.3"
       }
     }
   }

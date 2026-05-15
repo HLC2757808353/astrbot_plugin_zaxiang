@@ -5,7 +5,8 @@ from typing import Dict, Optional
 class PokeReaction:
     DEFAULT_CONFIG = {
         'enabled': True,
-        'probability': 0.5,
+        'back_probability': 0.5,
+        'follow_probability': 0.3,
     }
 
     def __init__(self):
@@ -17,10 +18,6 @@ class PokeReaction:
 
     def is_enabled(self) -> bool:
         return self.config.get('enabled', True)
-
-    def should_poke_back(self) -> bool:
-        probability = float(self.config.get('probability', 0.5))
-        return random.random() < probability
 
     def process_poke_event(self, raw_message: dict, bot_id: str) -> Optional[dict]:
         if not self.is_enabled():
@@ -36,18 +33,22 @@ class PokeReaction:
             return None
 
         target_id = str(raw_message.get('target_id', ''))
-        if target_id != str(bot_id):
-            return None
-
         poker_id = str(raw_message.get('user_id', ''))
         group_id = str(raw_message.get('group_id', ''))
-        if not group_id:
+        if not group_id or not target_id:
             return None
 
-        if not self.should_poke_back():
-            return None
+        if target_id == str(bot_id):
+            if random.random() < float(self.config.get('back_probability', 0.5)):
+                return {
+                    'target_id': poker_id,
+                    'group_id': group_id,
+                }
+        else:
+            if poker_id != str(bot_id) and random.random() < float(self.config.get('follow_probability', 0.3)):
+                return {
+                    'target_id': target_id,
+                    'group_id': group_id,
+                }
 
-        return {
-            'poker_id': poker_id,
-            'group_id': group_id,
-        }
+        return None

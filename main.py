@@ -1,6 +1,7 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
-from astrbot.api.message_components import At, Poke
+from astrbot.api.message_components import At
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from .modules import ColdViolenceManager, MuteTracker, PokeReaction
 
 
@@ -51,9 +52,17 @@ class ZaxiangPlugin(Star):
             return
 
         if isinstance(raw_message, dict) and raw_message.get('sub_type') == 'poke':
-            result = self.poke_reaction.process_poke_event(raw_message, bot_id)
-            if result:
-                yield event.chain_result([Poke(id=result['poker_id'])])
+            poke_result = self.poke_reaction.process_poke_event(raw_message, bot_id)
+            if poke_result:
+                if isinstance(event, AiocqhttpMessageEvent):
+                    try:
+                        await event.bot.api.call_action(
+                            'send_group_poke',
+                            group_id=int(poke_result['group_id']),
+                            user_id=int(poke_result['target_id']),
+                        )
+                    except Exception:
+                        pass
             return
 
         if not self.cold_violence_mgr.is_enabled():
