@@ -1,8 +1,8 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.api.message_components import At
-from .modules import ColdViolenceManager, MuteTracker
+from astrbot.api.message_components import At, Poke
+from .modules import ColdViolenceManager, MuteTracker, PokeReaction
 import json
 
 
@@ -12,11 +12,13 @@ class ZaxiangPlugin(Star):
         super().__init__(context)
         self.cold_violence_mgr = ColdViolenceManager()
         self.mute_tracker = MuteTracker()
+        self.poke_reaction = PokeReaction()
         self.config = config or {}
     
     async def initialize(self):
         self.cold_violence_mgr.initialize(self.config)
         self.mute_tracker.initialize(self.config)
+        self.poke_reaction.initialize(self.config)
         await self.cold_violence_mgr.start_cleanup_task()
         logger.info(f"引灯续昼杂项插件初始化完成")
     
@@ -59,6 +61,12 @@ class ZaxiangPlugin(Star):
             result = self.mute_tracker.process_notice_event(raw_message, bot_id)
             if result:
                 await self._inject_mute_context(event, result)
+            return
+
+        if isinstance(raw_message, dict) and raw_message.get('sub_type') == 'poke':
+            result = self.poke_reaction.process_poke_event(raw_message, bot_id)
+            if result:
+                yield event.chain_result([Poke(id=result['poker_id'])])
             return
 
         if not self.cold_violence_mgr.is_enabled():

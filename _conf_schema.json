@@ -42,5 +42,24 @@
         "hint": "启用后AI被禁言解禁时会告知是谁禁言的"
       }
     }
+  },
+  "poke_reaction": {
+    "description": "戳一戳反应配置",
+    "type": "object",
+    "hint": "AI被戳一戳时有概率反戳回去",
+    "items": {
+      "enabled": {
+        "description": "是否启用戳一戳反应",
+        "type": "bool",
+        "default": true,
+        "hint": "启用后被戳有概率反戳"
+      },
+      "probability": {
+        "description": "反戳概率",
+        "type": "float",
+        "default": 0.5,
+        "hint": "被戳时反戳的概率，0~1之间，0.5即50%概率"
+      }
+    }
   }
 }
