@@ -1,9 +1,7 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
 from astrbot.api.message_components import At, Poke
 from .modules import ColdViolenceManager, MuteTracker, PokeReaction
-import json
 
 
 @register("astrbot_plugin_zaxiang", "引灯续昼", "引灯续昼杂项插件", "1.0.0")
@@ -20,37 +18,25 @@ class ZaxiangPlugin(Star):
         self.mute_tracker.initialize(self.config)
         self.poke_reaction.initialize(self.config)
         await self.cold_violence_mgr.start_cleanup_task()
-        logger.info(f"引灯续昼杂项插件初始化完成")
     
     async def terminate(self):
         await self.cold_violence_mgr.stop_cleanup_task()
-        logger.info("引灯续昼杂项插件已终止")
     
-    async def _inject_mute_context(self, event: AstrMessageEvent, mute_info: dict):
-        try:
-            umo = event.unified_msg_origin
-            conv_mgr = self.context.conversation_manager
-            conv_id = await conv_mgr.get_curr_conversation_id(umo)
-            if not conv_id:
-                return
-            conv = await conv_mgr.get_conversation(umo, conv_id)
-            if not conv or not conv.history:
-                return
-            
-            history = json.loads(conv.history) if isinstance(conv.history, str) else conv.history
-            if not isinstance(history, list):
-                return
-            
-            context_msg = {
-                "role": "system",
-                "content": f"用户{mute_info['operator_id']}刚刚解除了你的群禁言，你之前被TA禁言了{mute_info['duration_str']}。你现在可以正常发言了。"
-            }
-            history.append(context_msg)
-            
-            await conv_mgr.update_conversation(umo, conv_id, history=history)
-            logger.info(f"已将禁言上下文注入会话 {conv_id}")
-        except Exception as e:
-            logger.error(f"注入禁言上下文失败: {e}")
+    async def _on_mute_lifted(self, event: AstrMessageEvent, mute_info: dict):
+        curr_cid = await self.context.conversation_manager.get_curr_conversation_id(
+            event.unified_msg_origin
+        )
+        conversation = None
+        if curr_cid:
+            conversation = await self.context.conversation_manager.get_conversation(
+                event.unified_msg_origin, curr_cid
+            )
+        yield event.request_llm(
+            prompt="你已经可以说话了。",
+            system_prompt=f"你刚刚被用户{mute_info['operator_id']}禁言了{mute_info['duration_str']}，现在禁言刚被解除。请根据你的性格，自然地表达你的感受。",
+            session_id=curr_cid or "",
+            conversation=conversation,
+        )
     
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -60,7 +46,8 @@ class ZaxiangPlugin(Star):
         if isinstance(raw_message, dict) and raw_message.get('notice_type') == 'group_ban':
             result = self.mute_tracker.process_notice_event(raw_message, bot_id)
             if result:
-                await self._inject_mute_context(event, result)
+                async for resp in self._on_mute_lifted(event, result):
+                    yield resp
             return
 
         if isinstance(raw_message, dict) and raw_message.get('sub_type') == 'poke':

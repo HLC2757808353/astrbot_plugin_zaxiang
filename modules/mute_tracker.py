@@ -1,7 +1,6 @@
 import time
 from typing import Dict, Optional
 from dataclasses import dataclass
-from astrbot.api import logger
 
 
 @dataclass
@@ -15,19 +14,18 @@ class MuteRecord:
 
 
 class MuteTracker:
+    DEFAULT_CONFIG = {
+        'enabled': True,
+    }
+
     def __init__(self):
         self.mute_records: Dict[str, MuteRecord] = {}
-        self.config: Dict = {}
+        self.config: Dict = self.DEFAULT_CONFIG.copy()
         self._last_active_group: Optional[str] = None
 
     def initialize(self, config: Dict):
         mute_config = config.get('mute_tracker', {})
         self.config = {**self.DEFAULT_CONFIG, **mute_config}
-        logger.info("禁言追踪管理器初始化完成")
-
-    DEFAULT_CONFIG = {
-        'enabled': True,
-    }
 
     def is_enabled(self) -> bool:
         return self.config.get('enabled', True)
@@ -62,9 +60,6 @@ class MuteTracker:
             )
             self.mute_records[group_id] = record
             self._last_active_group = group_id
-            logger.info(
-                f"检测到机器人在群{group_id}被{operator_id}禁言{duration}秒"
-            )
             return None
 
         if sub_type == 'lift_ban' or duration == 0:
@@ -77,9 +72,6 @@ class MuteTracker:
                 else:
                     duration_str = f"{mute_seconds}秒"
 
-                logger.info(
-                    f"机器人在群{group_id}的禁言已解除，操作者: {record.operator_id}"
-                )
                 return {
                     'group_id': group_id,
                     'operator_id': record.operator_id,
