@@ -104,10 +104,15 @@ class ColdViolenceManager:
         return True
     
     def get_cold_violence_info(self, user_id: str) -> Optional[ColdViolenceRecord]:
+        self.cleanup_expired()
         user_id_str = str(user_id)
-        if not self.is_under_cold_violence(user_id_str):
+        if user_id_str not in self.cold_violence_records:
             return None
-        return self.cold_violence_records.get(user_id_str)
+        record = self.cold_violence_records[user_id_str]
+        if record.is_expired:
+            del self.cold_violence_records[user_id_str]
+            return None
+        return record
     
     def add_cold_violence(
         self, 

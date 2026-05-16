@@ -32,9 +32,14 @@ class ZaxiangPlugin(Star):
             conversation = await self.context.conversation_manager.get_conversation(
                 event.unified_msg_origin, curr_cid
             )
+        op_id = mute_info.get('operator_id', '')
+        if op_id and op_id != '0':
+            ban_desc = f"你刚刚被用户{op_id}禁言了{mute_info['duration_str']}"
+        else:
+            ban_desc = f"你刚刚被禁言了{mute_info['duration_str']}"
         yield event.request_llm(
             prompt="你已经可以说话了。",
-            system_prompt=f"你刚刚被用户{mute_info['operator_id']}禁言了{mute_info['duration_str']}，现在禁言刚被解除。请根据你的性格，自然地表达你的感受。",
+            system_prompt=f"{ban_desc}，现在禁言刚被解除。请根据你的性格，自然地表达你的感受。",
             session_id=curr_cid or "",
             conversation=conversation,
         )
@@ -67,6 +72,8 @@ class ZaxiangPlugin(Star):
 
         if not self.cold_violence_mgr.is_enabled():
             return
+        
+        self.cold_violence_mgr.cleanup_expired()
         
         sender_id = event.get_sender_id()
         

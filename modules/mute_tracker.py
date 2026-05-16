@@ -50,10 +50,13 @@ class MuteTracker:
         sub_type = raw_message.get('sub_type', '')
 
         if sub_type == 'ban' and duration > 0:
+            op_id = str(operator_id)
+            if op_id == user_id or op_id in ('', '0'):
+                op_id = ''
             record = MuteRecord(
                 group_id=group_id,
-                operator_id=operator_id,
-                operator_name=str(operator_id),
+                operator_id=op_id,
+                operator_name=op_id or '某人',
                 mute_time=time.time(),
                 duration=duration,
                 notified=False,
