@@ -130,7 +130,12 @@ class ZaxiangPlugin(Star):
             return
         
         if self.cold_violence_mgr.add_cold_violence(target_id, target_name):
-            yield event.plain_result(f"已对{target_name} 实施冷暴力")
+            info = self.cold_violence_mgr.get_cold_violence_info(target_id)
+            if info:
+                remaining = self.cold_violence_mgr.format_remaining_time(info.remaining_time)
+                yield event.plain_result(f"已对{target_name}实施冷暴力，剩余 {remaining}")
+            else:
+                yield event.plain_result(f"已对{target_name} 实施冷暴力")
         else:
             yield event.plain_result("冷暴力失败")
     
@@ -202,7 +207,9 @@ class ZaxiangPlugin(Star):
             return
         
         if self.cold_violence_mgr.add_cold_violence(user_id, user_name, duration):
-            yield event.plain_result(f"已对 {user_name} 实施冷暴力，时长 {duration} 分钟")
+            info = self.cold_violence_mgr.get_cold_violence_info(user_id)
+            remaining = self.cold_violence_mgr.format_remaining_time(info.remaining_time) if info else f"{duration}分钟"
+            yield event.plain_result(f"已对 {user_name} 实施冷暴力，剩余 {remaining}")
         else:
             yield event.plain_result(f"冷暴力失败")
     

@@ -25,9 +25,21 @@ class ColdViolenceRecord:
     @property
     def is_expired(self) -> bool:
         return time.time() >= self.end_time
+    
+    def extend(self, add_minutes: int, max_duration: int = 1440) -> int:
+        remaining_seconds = self.remaining_time
+        total_seconds = remaining_seconds + add_minutes * 60
+        max_seconds = max_duration * 60
+        if total_seconds > max_seconds:
+            total_seconds = max_seconds
+        self.start_time = time.time()
+        self.duration = max(1, int((total_seconds + 59) // 60))
+        return self.duration
 
 
 class ColdViolenceManager:
+    MAX_DURATION_MINUTES = 24 * 60
+    
     DEFAULT_CONFIG = {
         'enabled': True,
         'authority_ids': [],
@@ -130,11 +142,18 @@ class ColdViolenceManager:
         if duration is None:
             duration = self.config.get('default_duration', 30)
         
+        existing = self.cold_violence_records.get(user_id_str)
+        if existing and not existing.is_expired:
+            existing.user_name = user_name
+            existing.extend(duration, self.MAX_DURATION_MINUTES)
+            logger.info(f"已延长 {user_id}({user_name}) 的冷暴力，增加 {duration} 分钟")
+            return True
+        
         record = ColdViolenceRecord(
             user_id=user_id_str,
             user_name=user_name,
             start_time=time.time(),
-            duration=duration,
+            duration=min(duration, self.MAX_DURATION_MINUTES),
             reason=reason
         )
         
