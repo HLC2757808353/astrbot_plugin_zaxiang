@@ -142,13 +142,6 @@ class ColdViolenceManager:
         if duration is None:
             duration = self.config.get('default_duration', 30)
         
-        existing = self.cold_violence_records.get(user_id_str)
-        if existing and not existing.is_expired:
-            existing.user_name = user_name
-            existing.extend(duration, self.MAX_DURATION_MINUTES)
-            logger.info(f"已延长 {user_id}({user_name}) 的冷暴力，增加 {duration} 分钟")
-            return True
-        
         record = ColdViolenceRecord(
             user_id=user_id_str,
             user_name=user_name,
