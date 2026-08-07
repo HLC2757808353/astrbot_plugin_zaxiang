@@ -1,8 +1,8 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
-from astrbot.api.message_components import At
+from astrbot.api.message_components import At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-from .modules import ColdViolenceManager, MuteTracker, PokeReaction
+from .modules import ColdViolenceManager, MuteTracker, PokeReaction, WordFilter
 
 
 @register("astrbot_plugin_zaxiang", "引灯续昼", "引灯续昼杂项插件", "1.0.0")
@@ -12,16 +12,30 @@ class ZaxiangPlugin(Star):
         self.cold_violence_mgr = ColdViolenceManager()
         self.mute_tracker = MuteTracker()
         self.poke_reaction = PokeReaction()
+        self.word_filter = WordFilter()
         self.config = config or {}
     
     async def initialize(self):
         self.cold_violence_mgr.initialize(self.config)
         self.mute_tracker.initialize(self.config)
         self.poke_reaction.initialize(self.config)
+        self.word_filter.initialize(self.config)
         await self.cold_violence_mgr.start_cleanup_task()
     
     async def terminate(self):
         await self.cold_violence_mgr.stop_cleanup_task()
+    
+    @filter.on_decorating_result()
+    async def on_decorating_result(self, event: AstrMessageEvent):
+        """发送消息前，将输出文本中的过滤词替换为固定词。"""
+        if not self.word_filter.is_enabled():
+            return
+        result = event.get_result()
+        if result is None or not result.chain:
+            return
+        for comp in result.chain:
+            if isinstance(comp, Plain):
+                comp.text = self.word_filter.filter_text(comp.text)
     
     async def _on_mute_lifted(self, event: AstrMessageEvent, mute_info: dict):
         curr_cid = await self.context.conversation_manager.get_curr_conversation_id(

@@ -67,5 +67,30 @@
         "hint": "别人互戳时AI跟戳同一人的概率，0~1，默认0.3"
       }
     }
+  },
+  "word_filter": {
+    "description": "输出过滤器配置",
+    "type": "object",
+    "hint": "将机器人输出消息中的过滤词替换为固定词",
+    "items": {
+      "enabled": {
+        "description": "是否启用输出过滤器",
+        "type": "bool",
+        "default": true,
+        "hint": "启用后，机器人输出消息中命中的过滤词会被替换为固定词"
+      },
+      "filter_words": {
+        "description": "过滤词库（多个词用逗号隔开）",
+        "type": "string",
+        "default": "",
+        "hint": "需要被替换的词，多个词之间用逗号隔开，例如：词1,词2,词3。修改保存后立即生效"
+      },
+      "replacement": {
+        "description": "替换词",
+        "type": "string",
+        "default": "filtered",
+        "hint": "命中的过滤词将被替换成这个词"
+      }
+    }
   }
 }
