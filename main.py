@@ -1,6 +1,7 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api.message_components import At, Plain
+from astrbot.api.provider import LLMResponse
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from .modules import ColdViolenceManager, MuteTracker, PokeReaction, WordFilter
 
@@ -25,6 +26,16 @@ class ZaxiangPlugin(Star):
     async def terminate(self):
         await self.cold_violence_mgr.stop_cleanup_task()
     
+    @filter.on_llm_response()
+    async def on_llm_response(self, event: AstrMessageEvent, response: LLMResponse):
+        """LLM 响应完成后、转换为消息链之前进行过滤（覆盖非流式输出场景）。"""
+        if not self.word_filter.is_enabled():
+            return
+        text = response.completion_text
+        if text:
+            # completion_text 的 setter 会同步更新 result_chain 中的纯文本段
+            response.completion_text = self.word_filter.filter_text(text)
+
     @filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
         """发送消息前，将输出文本中的过滤词替换为固定词。"""
