@@ -92,5 +92,48 @@
         "hint": "命中的过滤词将被替换成这个词"
       }
     }
+  },
+  "image_gen": {
+    "description": "AI 绘图配置",
+    "type": "object",
+    "hint": "文生图 / 图生图，AI 按需调用，生成图片会保存并在面板可复盘",
+    "items": {
+      "enabled": {
+        "description": "是否启用 AI 绘图",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后 AI 不会调用生图工具"
+      },
+      "api_base": {
+        "description": "绘图 API 地址",
+        "type": "string",
+        "default": "https://one.aznb.top/v1",
+        "hint": "OpenAI 兼容的 /v1 接口地址"
+      },
+      "api_key": {
+        "description": "绘图 API 密钥",
+        "type": "string",
+        "default": "sk-jf8e07U1t9wXMwOgrrJzYZaTJE4J3FbaQxqeB39B69w8zKEg",
+        "hint": "调用绘图接口用的密钥"
+      },
+      "model": {
+        "description": "生图模型",
+        "type": "string",
+        "default": "gpt-image-2.5-flare",
+        "hint": "支持文生图/图生图的模型名，如 gpt-image-2.5-flare"
+      },
+      "size": {
+        "description": "默认生成尺寸",
+        "type": "string",
+        "default": "1024x1024",
+        "hint": "可选 1024x1024 / 1024x1536 / 1536x1024"
+      },
+      "retention_days": {
+        "description": "图片保留天数",
+        "type": "int",
+        "default": 7,
+        "hint": "超过该天数的生成图片会被自动清理（每日扫描一次）"
+      }
+    }
   }
 }

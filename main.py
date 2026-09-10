@@ -1,9 +1,16 @@
+import os
+from typing import Any
+
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
-from astrbot.api.message_components import At, Plain
+from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.provider import LLMResponse
+from astrbot.api import logger
+from astrbot.api.web import error_response, file_response, json_response
+from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-from .modules import ColdViolenceManager, MuteTracker, PokeReaction, WordFilter
+from astrbot.core.star.star_tools import StarTools
+from .modules import ColdViolenceManager, MuteTracker, PokeReaction, WordFilter, ImageGenManager
 
 
 @register("astrbot_plugin_zaxiang", "引灯续昼", "引灯续昼杂项插件", "1.0.0")
@@ -14,6 +21,7 @@ class ZaxiangPlugin(Star):
         self.mute_tracker = MuteTracker()
         self.poke_reaction = PokeReaction()
         self.word_filter = WordFilter()
+        self.image_gen = ImageGenManager()
         self.config = config or {}
     
     async def initialize(self):
@@ -21,10 +29,40 @@ class ZaxiangPlugin(Star):
         self.mute_tracker.initialize(self.config)
         self.poke_reaction.initialize(self.config)
         self.word_filter.initialize(self.config)
+        self.image_gen.initialize(self.config)
+
+        # 图片落盘目录：data/plugin_data/astrbot_plugin_zaxiang/images
+        try:
+            plugin_data_dir = StarTools.get_data_dir("astrbot_plugin_zaxiang")
+            self.image_gen.set_data_dir(plugin_data_dir / "images")
+        except Exception as e:
+            logger.error(f"初始化图片保存目录失败: {e}")
+
+        try:
+            await self.image_gen.ensure_table(self.context.get_db())
+        except Exception as e:
+            logger.error(f"初始化图片生成数据表失败: {e}")
+
+        # 注册复盘页面用到的 Web API
+        self.context.register_web_api(
+            "zaxiang_image_history/list", self._web_hist_list,
+            ["GET"], "获取 AI 生成图片历史列表",
+        )
+        self.context.register_web_api(
+            "zaxiang_image_history/file/<id>", self._web_hist_file,
+            ["GET"], "获取单张 AI 生成图片",
+        )
+        self.context.register_web_api(
+            "zaxiang_image_history/delete/<id>", self._web_hist_delete,
+            ["DELETE"], "删除一条 AI 生成图片记录",
+        )
+
         await self.cold_violence_mgr.start_cleanup_task()
+        await self.image_gen.start_cleanup_task()
     
     async def terminate(self):
         await self.cold_violence_mgr.stop_cleanup_task()
+        await self.image_gen.stop_cleanup_task()
     
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, response: LLMResponse):
@@ -283,3 +321,134 @@ class ZaxiangPlugin(Star):
                 )
         else:
             yield event.plain_result(f"{user_name} 未被冷暴力")
+
+    # ---------------- AI 绘图（文生图 / 图生图） ----------------
+
+    async def _send_generated_image(self, event: AstrMessageEvent, path: str, caption: str = ""):
+        """把生成的图片直接发送给用户，可附带一行小字。"""
+        chain = [Image.fromFileSystem(path)]
+        if caption:
+            chain.append(Plain("\n" + caption))
+        await event.send(MessageChain(chain))
+
+    @filter.llm_tool(name="generate_image")
+    async def generate_image_tool(
+        self, event: AstrMessageEvent, prompt: str, size: str = ""
+    ) -> MessageEventResult:
+        '''根据用户的描述生成一张全新的图片，并自动把图片发给用户。仅当用户明确要求画图/绘画/生成图片/想象一张图时调用，普通聊天不要调用。为用户斟酌一个具体、形象的描述，使用英文效果通常更好。
+
+        Args:
+            prompt(string): 详细的图片描述，应包含主体、场景、整体风格、光线、氛围等，越具体越好。
+            size(string): 可选尺寸 1024x1024、1024x1536、1536x1024，不知道就留空。
+        '''
+        mgr = self.image_gen
+        if not mgr.config.get('enabled', True):
+            yield event.plain_result("绘图功能未启用")
+            return
+        if not prompt or not str(prompt).strip():
+            yield event.plain_result("请提供图片描述")
+            return
+        sender_id, group_id, session_id = mgr.extract_sender_info(event)
+        try:
+            result = await mgr.generate(str(prompt).strip(), size)
+        except Exception as e:
+            logger.error(f"文生图失败: {e}")
+            yield event.plain_result(f"图片生成失败了：{e}")
+            return
+        try:
+            await mgr.add_record(
+                self.context.get_db(), mode='t2i', prompt=str(prompt).strip(),
+                revised_prompt=result['revised_prompt'], image_path=result['path'],
+                sender_id=sender_id, group_id=group_id, session_id=session_id,
+            )
+        except Exception as e:
+            logger.warning(f"记录生成图片到数据库失败: {e}")
+        await self._send_generated_image(event, result['path'])
+        reply = f"图片已生成并发送给用户。你的原始描述：{prompt}。"
+        if result.get('revised_prompt'):
+            reply += f" 模型优化后的描述：{result['revised_prompt']}。"
+        reply += " 请用一两句话自然地介绍这张图。"
+        yield event.plain_result(reply)
+
+    @filter.llm_tool(name="edit_image")
+    async def edit_image_tool(
+        self, event: AstrMessageEvent, prompt: str, size: str = ""
+    ) -> MessageEventResult:
+        '''基于用户消息里发送的图片进行第二次创作（图生图）：参考用户当条消息附带的图片，按描述修改/重绘它。仅当用户明确要求"把这张图改成…"/"基于这张图再画…"时调用，需要用户刚刚发过图片。
+
+        Args:
+            prompt(string): 希望如何修改或重绘这张图的描述，具体且形象，英文效果通常更好。
+            size(string): 可选尺寸 1024x1024、1024x1536、1536x1024，不知道就留空。
+        '''
+        mgr = self.image_gen
+        if not mgr.config.get('enabled', True):
+            yield event.plain_result("绘图功能未启用")
+            return
+        if not prompt or not str(prompt).strip():
+            yield event.plain_result("请提供修改描述")
+            return
+        ref_path = await mgr.resolve_reference_image(event)
+        if not ref_path:
+            yield event.plain_result("当前消息里没有找到图片，请先发一张图，我再基于它修改")
+            return
+        sender_id, group_id, session_id = mgr.extract_sender_info(event)
+        try:
+            result = await mgr.edit(str(prompt).strip(), ref_path, size)
+        except Exception as e:
+            logger.error(f"图生图失败: {e}")
+            yield event.plain_result(f"图片修改失败了：{e}")
+            return
+        try:
+            await mgr.add_record(
+                self.context.get_db(), mode='i2i', prompt=str(prompt).strip(),
+                revised_prompt=result['revised_prompt'], image_path=result['path'],
+                sender_id=sender_id, group_id=group_id, session_id=session_id,
+            )
+        except Exception as e:
+            logger.warning(f"记录修改图片到数据库失败: {e}")
+        await self._send_generated_image(event, result['path'])
+        reply = "图片已修改并发送给用户。"
+        if result.get('revised_prompt'):
+            reply += f" 模型对修改的描述：{result['revised_prompt']}。"
+        reply += " 请用一两句话自然地说明改动。"
+        yield event.plain_result(reply)
+
+    # ---------------- 复盘 Web API ----------------
+
+    async def _web_hist_list(self) -> Any:
+        try:
+            records = await self.image_gen.list_records(self.context.get_db())
+        except Exception as e:
+            logger.error(f"读取生成历史失败: {e}")
+            return error_response("读取历史失败")
+        items = [
+            {
+                "id": r["id"],
+                "mode": r["mode"],
+                "prompt": r["prompt"],
+                "revised_prompt": r["revised_prompt"],
+                "created_at": r["created_at"],
+                "expires_at": r["expires_at"],
+                "file_url": f"/api/plugins/extensions/zaxiang_image_history/file/{r['id']}",
+            }
+            for r in records
+        ]
+        return json_response(items)
+
+    async def _web_hist_file(self, id) -> Any:
+        try:
+            rec = await self.image_gen.get_record(self.context.get_db(), int(id))
+        except (TypeError, ValueError):
+            return error_response("参数错误", status_code=400)
+        if not rec or not rec.get("image_path") or not os.path.exists(rec["image_path"]):
+            return error_response("图片不存在或已过期", status_code=404)
+        return file_response(rec["image_path"], content_type="image/png")
+
+    async def _web_hist_delete(self, id) -> Any:
+        try:
+            ok = await self.image_gen.delete_record(self.context.get_db(), int(id))
+        except (TypeError, ValueError):
+            return error_response("参数错误", status_code=400)
+        if not ok:
+            return error_response("记录不存在", status_code=404)
+        return json_response({"deleted": True})
