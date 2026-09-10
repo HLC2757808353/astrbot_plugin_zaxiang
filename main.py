@@ -3,11 +3,10 @@ from typing import Any
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
-from astrbot.api.message_components import At, Image, Plain
+from astrbot.api.message_components import At, Plain
 from astrbot.api.provider import LLMResponse
 from astrbot.api import logger
 from astrbot.api.web import error_response, file_response, json_response
-from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.core.star.star_tools import StarTools
 from .modules import ColdViolenceManager, MuteTracker, PokeReaction, WordFilter, ImageGenManager
@@ -324,13 +323,6 @@ class ZaxiangPlugin(Star):
 
     # ---------------- AI 绘图（文生图 / 图生图） ----------------
 
-    async def _send_generated_image(self, event: AstrMessageEvent, path: str, caption: str = ""):
-        """把生成的图片直接发送给用户，可附带一行小字。"""
-        chain = [Image.fromFileSystem(path)]
-        if caption:
-            chain.append(Plain("\n" + caption))
-        await event.send(MessageChain(chain))
-
     @filter.llm_tool(name="generate_image")
     async def generate_image_tool(
         self, event: AstrMessageEvent, prompt: str, size: str = ""
@@ -363,12 +355,12 @@ class ZaxiangPlugin(Star):
             )
         except Exception as e:
             logger.warning(f"记录生成图片到数据库失败: {e}")
-        await self._send_generated_image(event, result['path'])
-        reply = f"图片已生成并发送给用户。你的原始描述：{prompt}。"
+        # 先把图片发出，再把简短的反馈回传给 LLM，由 LLM 自然组织语言
+        yield event.image_result(result['path'])
+        feedback = f"图片已经生成并发送给用户了。原始描述：{prompt}。"
         if result.get('revised_prompt'):
-            reply += f" 模型优化后的描述：{result['revised_prompt']}。"
-        reply += " 请用一两句话自然地介绍这张图。"
-        yield event.plain_result(reply)
+            feedback += f" 模型优化后的描述：{result['revised_prompt']}。"
+        yield feedback
 
     @filter.llm_tool(name="edit_image")
     async def edit_image_tool(
@@ -406,12 +398,12 @@ class ZaxiangPlugin(Star):
             )
         except Exception as e:
             logger.warning(f"记录修改图片到数据库失败: {e}")
-        await self._send_generated_image(event, result['path'])
-        reply = "图片已修改并发送给用户。"
+        # 先把图片发出，再把简短的反馈回传给 LLM，由 LLM 自然组织语言
+        yield event.image_result(result['path'])
+        feedback = "图片已经修改并发送给用户了。"
         if result.get('revised_prompt'):
-            reply += f" 模型对修改的描述：{result['revised_prompt']}。"
-        reply += " 请用一两句话自然地说明改动。"
-        yield event.plain_result(reply)
+            feedback += f" 模型对修改的描述：{result['revised_prompt']}。"
+        yield feedback
 
     # ---------------- 复盘 Web API ----------------
 

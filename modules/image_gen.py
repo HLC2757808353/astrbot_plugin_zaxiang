@@ -183,9 +183,9 @@ class ImageGenManager:
 
     # ---------- 数据库记录 ----------
 
-    async def _run_sql(self, db, sql: str, params: tuple = ()):
+    async def _run_sql(self, db, sql: str, params: Optional[dict] = None):
         async with db.get_db() as session:
-            await session.execute(text(sql), params)
+            await session.execute(text(sql), params or {})
             await session.commit()
 
     async def ensure_table(self, db):
@@ -216,9 +216,19 @@ class ImageGenManager:
             db,
             """INSERT INTO image_gen_records
                (mode, prompt, revised_prompt, size, image_path, sender_id, group_id, session_id, created_at, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (mode, prompt, revised_prompt, self.config["size"], str(image_path),
-             sender_id or "", group_id or "", session_id or "", created, expires),
+               VALUES (:mode, :prompt, :revised_prompt, :size, :image_path, :sender_id, :group_id, :session_id, :created_at, :expires_at)""",
+            {
+                "mode": mode,
+                "prompt": prompt,
+                "revised_prompt": revised_prompt,
+                "size": self.config["size"],
+                "image_path": str(image_path),
+                "sender_id": sender_id or "",
+                "group_id": group_id or "",
+                "session_id": session_id or "",
+                "created_at": created,
+                "expires_at": expires,
+            },
         )
 
     async def cleanup_expired(self, db=None):
@@ -289,7 +299,7 @@ class ImageGenManager:
                 os.remove(image_path)
         except OSError as e:
             logger.warning(f"删除图片文件失败 {image_path}: {e}")
-        await self._run_sql(db, "DELETE FROM image_gen_records WHERE id = :id", (int(record_id),))
+        await self._run_sql(db, "DELETE FROM image_gen_records WHERE id = :id", {"id": int(record_id)})
         return True
 
     # ---------- 参考图解析 ----------
