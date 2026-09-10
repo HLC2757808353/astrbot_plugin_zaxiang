@@ -3,10 +3,11 @@ from typing import Any
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
-from astrbot.api.message_components import At, Plain
+from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.provider import LLMResponse
 from astrbot.api import logger
-from astrbot.api.web import error_response, file_response, json_response
+from astrbot.api.web import error_response, json_response, request
+from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.core.star.star_tools import StarTools
 from .modules import ColdViolenceManager, MuteTracker, PokeReaction, WordFilter, ImageGenManager
@@ -52,8 +53,8 @@ class ZaxiangPlugin(Star):
             ["GET"], "获取单张 AI 生成图片",
         )
         self.context.register_web_api(
-            "zaxiang_image_history/delete/<id>", self._web_hist_delete,
-            ["DELETE"], "删除一条 AI 生成图片记录",
+            "zaxiang_image_history/delete", self._web_hist_delete,
+            ["POST"], "删除一条 AI 生成图片记录",
         )
 
         await self.cold_violence_mgr.start_cleanup_task()
@@ -355,12 +356,10 @@ class ZaxiangPlugin(Star):
             )
         except Exception as e:
             logger.warning(f"记录生成图片到数据库失败: {e}")
-        # 先把图片发出，再把简短的反馈回传给 LLM，由 LLM 自然组织语言
-        yield event.image_result(result['path'])
-        feedback = f"图片已经生成并发送给用户了。原始描述：{prompt}。"
-        if result.get('revised_prompt'):
-            feedback += f" 模型优化后的描述：{result['revised_prompt']}。"
-        yield feedback
+        # 直接发图给用户（经实测 event.send 发本地文件最可靠）
+        await event.send(MessageChain([Image.fromFileSystem(result['path'])]))
+        # 只回传一句极简状态给 LLM，让它自己接话；不回显参数（LLM 自己知道）
+        yield "图片已经生成并发送给用户了。"
 
     @filter.llm_tool(name="edit_image")
     async def edit_image_tool(
@@ -398,14 +397,43 @@ class ZaxiangPlugin(Star):
             )
         except Exception as e:
             logger.warning(f"记录修改图片到数据库失败: {e}")
-        # 先把图片发出，再把简短的反馈回传给 LLM，由 LLM 自然组织语言
-        yield event.image_result(result['path'])
-        feedback = "图片已经修改并发送给用户了。"
-        if result.get('revised_prompt'):
-            feedback += f" 模型对修改的描述：{result['revised_prompt']}。"
-        yield feedback
+        # 直接发图给用户（经实测 event.send 发本地文件最可靠）
+        await event.send(MessageChain([Image.fromFileSystem(result['path'])]))
+        # 只回传一句极简状态给 LLM，让它自己接话
+        yield "图片已经修改并发送给用户了。"
 
     # ---------------- 复盘 Web API ----------------
+
+    @staticmethod
+    def _make_thumb_data_url(image_path: str, size: int = 256) -> str:
+        """把图片转成缩略图 base64 data URL，供复盘页面展示。失败返回空串。"""
+        try:
+            from PIL import Image as PILImage
+            from io import BytesIO
+            import base64 as b64
+            if not os.path.exists(image_path):
+                return ""
+            img = PILImage.open(image_path)
+            img.thumbnail((size, size))
+            buf = BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=70)
+            data = b64.b64encode(buf.getvalue()).decode()
+            return f"data:image/jpeg;base64,{data}"
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _make_full_data_url(image_path: str) -> str:
+        """把原图转成 base64 data URL。失败返回空串。"""
+        try:
+            import base64 as b64
+            if not os.path.exists(image_path):
+                return ""
+            with open(image_path, "rb") as f:
+                data = b64.b64encode(f.read()).decode()
+            return f"data:image/png;base64,{data}"
+        except Exception:
+            return ""
 
     async def _web_hist_list(self) -> Any:
         try:
@@ -413,34 +441,47 @@ class ZaxiangPlugin(Star):
         except Exception as e:
             logger.error(f"读取生成历史失败: {e}")
             return error_response("读取历史失败")
-        items = [
-            {
-                "id": r["id"],
-                "mode": r["mode"],
-                "prompt": r["prompt"],
-                "revised_prompt": r["revised_prompt"],
-                "created_at": r["created_at"],
-                "expires_at": r["expires_at"],
-                "file_url": f"/api/plugins/extensions/zaxiang_image_history/file/{r['id']}",
-            }
-            for r in records
-        ]
-        return json_response(items)
+        items = []
+        for r in records:
+            items.append(
+                {
+                    "id": r["id"],
+                    "mode": r["mode"],
+                    "prompt": r["prompt"],
+                    "revised_prompt": r["revised_prompt"],
+                    "created_at": r["created_at"],
+                    "expires_at": r["expires_at"],
+                    "thumb": self._make_thumb_data_url(r["image_path"]),
+                }
+            )
+        # bridge 兼容：返回业务 JSON 对象而非 list
+        return json_response({"records": items})
 
     async def _web_hist_file(self, id) -> Any:
         try:
             rec = await self.image_gen.get_record(self.context.get_db(), int(id))
         except (TypeError, ValueError):
             return error_response("参数错误", status_code=400)
-        if not rec or not rec.get("image_path") or not os.path.exists(rec["image_path"]):
+        if not rec or not rec.get("image_path"):
+            return error_response("记录不存在", status_code=404)
+        data_url = self._make_full_data_url(rec["image_path"])
+        if not data_url:
             return error_response("图片不存在或已过期", status_code=404)
-        return file_response(rec["image_path"], content_type="image/png")
+        return json_response({"data_url": data_url})
 
-    async def _web_hist_delete(self, id) -> Any:
+    async def _web_hist_delete(self) -> Any:
         try:
-            ok = await self.image_gen.delete_record(self.context.get_db(), int(id))
+            payload = await request.json(default={})
+            record_id = int(payload.get("id") or 0)
         except (TypeError, ValueError):
             return error_response("参数错误", status_code=400)
+        if record_id <= 0:
+            return error_response("参数错误", status_code=400)
+        try:
+            ok = await self.image_gen.delete_record(self.context.get_db(), record_id)
+        except Exception as e:
+            logger.error(f"删除生成记录失败: {e}")
+            return error_response("删除失败")
         if not ok:
             return error_response("记录不存在", status_code=404)
         return json_response({"deleted": True})

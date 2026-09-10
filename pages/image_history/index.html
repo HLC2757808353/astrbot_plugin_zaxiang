@@ -46,7 +46,7 @@
     overflow: hidden; display: flex; flex-direction: column;
   }
   .thumb {
-    width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: #000;
+    width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: #ddd;
     cursor: zoom-in; display: block;
   }
   .body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
@@ -60,23 +60,27 @@
   }
   .meta { font-size: 12px; color: var(--muted); }
   .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
-  .link { font-size: 12px; color: var(--accent); text-decoration: none; }
-  .link:hover { text-decoration: underline; }
-  .del {
-    font-size: 12px; color: var(--danger); background: none; border: none;
-    cursor: pointer; padding: 2px 4px;
+  .btn {
+    font-size: 12px; background: none; border: none; cursor: pointer; padding: 2px 4px;
   }
+  .view { color: var(--accent); }
+  .del { color: var(--danger); }
   .lightbox {
     position: fixed; inset: 0; background: rgba(0,0,0,0.82); display: none;
     align-items: center; justify-content: center; z-index: 100; cursor: zoom-out;
+    flex-direction: column; gap: 12px;
   }
-  .lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 6px; }
+  .lightbox img { max-width: 92vw; max-height: 85vh; border-radius: 6px; }
+  .lightbox .lb-prompt {
+    max-width: 92vw; color: #fff; font-size: 13px; text-align: center; line-height: 1.5;
+    word-break: break-all;
+  }
   .toolbar { display: flex; align-items: center; gap: 10px; }
-  .btn {
+  .btn-refresh {
     background: var(--accent); color: #fff; border: none; border-radius: 6px;
     padding: 6px 14px; font-size: 13px; cursor: pointer;
   }
-  .btn:hover { opacity: 0.9; }
+  .btn-refresh:hover { opacity: 0.9; }
   .loading { text-align: center; color: var(--muted); padding: 40px; font-size: 14px; }
 </style>
 </head>
@@ -85,24 +89,29 @@
     <h1>AI 生成图片</h1>
     <div class="toolbar">
       <span class="stats" id="stats"></span>
-      <button class="btn" id="refresh">刷新</button>
+      <button class="btn-refresh" id="refresh">刷新</button>
     </div>
   </div>
   <div id="loading" class="loading">加载中…</div>
   <div id="empty" class="empty" style="display:none">还没有生成过图片</div>
   <div class="grid" id="grid"></div>
 
-  <div class="lightbox" id="lightbox"><img id="lightbox-img" alt=""></div>
+  <div class="lightbox" id="lightbox">
+    <img id="lightbox-img" alt="">
+    <div class="lb-prompt" id="lightbox-prompt"></div>
+  </div>
 
+<script src="/api/plugin/page/bridge-sdk.js"></script>
 <script>
 (function () {
-  var API_BASE = '/api/plugins/extensions/zaxiang_image_history';
+  var bridge = window.AstrBotPluginPage;
   var grid = document.getElementById('grid');
   var empty = document.getElementById('empty');
   var loading = document.getElementById('loading');
   var stats = document.getElementById('stats');
   var lightbox = document.getElementById('lightbox');
   var lightboxImg = document.getElementById('lightbox-img');
+  var lightboxPrompt = document.getElementById('lightbox-prompt');
 
   function fmt(iso) {
     if (!iso) return '';
@@ -133,58 +142,79 @@
       var card = document.createElement('div');
       card.className = 'card';
       var modeLabel = r.mode === 'i2i' ? '图生图' : '文生图';
+      var thumbSrc = r.thumb || '';
       card.innerHTML =
-        '<img class="thumb" src="' + esc(r.file_url) + '" alt="" loading="lazy" data-full="' + esc(r.file_url) + '">' +
+        '<img class="thumb" src="' + thumbSrc + '" alt="" loading="lazy" data-id="' + r.id + '">' +
         '<div class="body">' +
           '<span class="badge">' + modeLabel + '</span>' +
           '<div class="prompt" title="' + esc(r.prompt) + '">' + esc(r.prompt) + '</div>' +
-          '<div class="meta">' + fmt(r.created_at) + ' · ' + esc(r.size || '') + '</div>' +
+          '<div class="meta">' + fmt(r.created_at) + '</div>' +
           '<div class="actions">' +
-            '<a class="link" href="' + esc(r.file_url) + '" target="_blank">查看原图</a>' +
-            '<button class="del" data-id="' + r.id + '">删除</button>' +
+            '<button class="btn view" data-id="' + r.id + '">查看原图</button>' +
+            '<button class="btn del" data-id="' + r.id + '">删除</button>' +
           '</div>' +
         '</div>';
       grid.appendChild(card);
     });
     grid.querySelectorAll('.thumb').forEach(function (img) {
-      img.addEventListener('click', function () {
-        lightboxImg.src = img.dataset.full;
-        lightbox.style.display = 'flex';
-      });
+      img.addEventListener('click', function () { viewImage(img.dataset.id); });
+    });
+    grid.querySelectorAll('.view').forEach(function (btn) {
+      btn.addEventListener('click', function () { viewImage(btn.dataset.id); });
     });
     grid.querySelectorAll('.del').forEach(function (btn) {
       btn.addEventListener('click', async function () {
-        if (!confirm('确定删除这张生成记录及其文件吗？')) return;
+        if (!confirm('确定删除这条生成记录及其文件吗？')) return;
         var id = btn.dataset.id;
         try {
-          var res = await fetch(API_BASE + '/delete/' + id, { method: 'DELETE' });
-          if (res.ok) { load(); }
-          else { alert('删除失败'); }
-        } catch (e) { alert('删除失败：' + e); }
+          await bridge.apiPost('delete', { id: Number(id) });
+          load();
+        } catch (e) {
+          alert('删除失败：' + e.message);
+        }
       });
     });
+  }
+
+  async function viewImage(id) {
+    lightbox.style.display = 'flex';
+    lightboxImg.src = '';
+    lightboxPrompt.textContent = '加载中…';
+    try {
+      var res = await bridge.apiGet('file/' + id);
+      lightboxImg.src = res.data_url || '';
+      lightboxPrompt.textContent = res.prompt || '';
+    } catch (e) {
+      lightboxPrompt.textContent = '加载失败：' + e.message;
+    }
   }
 
   async function load() {
     loading.style.display = 'block';
     try {
-      var res = await fetch(API_BASE + '/list');
-      var data = await res.json();
-      render(data);
+      var res = await bridge.apiGet('list');
+      render(res.records || []);
     } catch (e) {
       loading.style.display = 'none';
       empty.style.display = 'block';
-      empty.textContent = '加载失败：' + e;
+      empty.textContent = '加载失败：' + e.message;
     }
   }
 
   lightbox.addEventListener('click', function () {
     lightbox.style.display = 'none';
     lightboxImg.src = '';
+    lightboxPrompt.textContent = '';
   });
   document.getElementById('refresh').addEventListener('click', load);
 
-  load();
+  async function init() {
+    try {
+      await bridge.ready();
+    } catch (e) { /* bridge 不可用时也继续尝试 */ }
+    load();
+  }
+  init();
 })();
 </script>
 </body>
