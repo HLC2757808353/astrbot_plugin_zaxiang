@@ -336,17 +336,18 @@ class ZaxiangPlugin(Star):
         '''
         mgr = self.image_gen
         if not mgr.config.get('enabled', True):
-            yield event.plain_result("绘图功能未启用")
+            yield "绘图功能当前未启用。"
             return
         if not prompt or not str(prompt).strip():
-            yield event.plain_result("请提供图片描述")
+            yield "缺少图片描述，无法生成。"
             return
         sender_id, group_id, session_id = mgr.extract_sender_info(event)
         try:
             result = await mgr.generate(str(prompt).strip(), size)
         except Exception as e:
             logger.error(f"文生图失败: {e}")
-            yield event.plain_result(f"图片生成失败了：{e}")
+            # 只把失败原因回传给 LLM，由 LLM 决定怎么跟用户说，不直接发固定文案
+            yield f"图片生成失败：{e}"
             return
         try:
             await mgr.add_record(
@@ -358,8 +359,8 @@ class ZaxiangPlugin(Star):
             logger.warning(f"记录生成图片到数据库失败: {e}")
         # 直接发图给用户（经实测 event.send 发本地文件最可靠）
         await event.send(MessageChain([Image.fromFileSystem(result['path'])]))
-        # 只回传一句极简状态给 LLM，让它自己接话；不回显参数（LLM 自己知道）
-        yield "图片已经生成并发送给用户了。"
+        # 回传一句状态给 LLM，让它自己接话，不直接发固定文案
+        yield "图片已经生成并直接发送给用户了。"
 
     @filter.llm_tool(name="edit_image")
     async def edit_image_tool(
@@ -373,21 +374,22 @@ class ZaxiangPlugin(Star):
         '''
         mgr = self.image_gen
         if not mgr.config.get('enabled', True):
-            yield event.plain_result("绘图功能未启用")
+            yield "绘图功能当前未启用。"
             return
         if not prompt or not str(prompt).strip():
-            yield event.plain_result("请提供修改描述")
+            yield "缺少修改描述，无法处理。"
             return
         ref_path = await mgr.resolve_reference_image(event)
         if not ref_path:
-            yield event.plain_result("当前消息里没有找到图片，请先发一张图，我再基于它修改")
+            yield "当前消息里没有找到图片，需要用户先发一张图才能基于它修改。"
             return
         sender_id, group_id, session_id = mgr.extract_sender_info(event)
         try:
             result = await mgr.edit(str(prompt).strip(), ref_path, size)
         except Exception as e:
             logger.error(f"图生图失败: {e}")
-            yield event.plain_result(f"图片修改失败了：{e}")
+            # 只把失败原因回传给 LLM，由 LLM 决定怎么跟用户说
+            yield f"图片修改失败：{e}"
             return
         try:
             await mgr.add_record(
@@ -399,8 +401,8 @@ class ZaxiangPlugin(Star):
             logger.warning(f"记录修改图片到数据库失败: {e}")
         # 直接发图给用户（经实测 event.send 发本地文件最可靠）
         await event.send(MessageChain([Image.fromFileSystem(result['path'])]))
-        # 只回传一句极简状态给 LLM，让它自己接话
-        yield "图片已经修改并发送给用户了。"
+        # 回传一句状态给 LLM，让它自己接话，不直接发固定文案
+        yield "图片已经修改并直接发送给用户了。"
 
     # ---------------- 复盘 Web API ----------------
 

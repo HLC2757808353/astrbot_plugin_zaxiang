@@ -30,7 +30,7 @@ class ImageGenManager:
     DEFAULT_CONFIG = {
         "enabled": True,
         "api_base": "https://one.aznb.top/v1",
-        "api_key": "sk-jf8e07U1t9wXMwOgrrJzYZaTJE4J3FbaQxqeB39B69w8zKEg",
+        "api_key": "",  # 在 WebUI 插件配置里填写，勿写入代码
         "model": "gpt-image-2.5-flare",
         "size": "1024x1024",
         "retention_days": 7,

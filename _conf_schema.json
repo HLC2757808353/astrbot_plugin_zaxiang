@@ -113,8 +113,8 @@
       "api_key": {
         "description": "绘图 API 密钥",
         "type": "string",
-        "default": "sk-jf8e07U1t9wXMwOgrrJzYZaTJE4J3FbaQxqeB39B69w8zKEg",
-        "hint": "调用绘图接口用的密钥"
+        "default": "",
+        "hint": "调用绘图接口用的密钥，请在此填写你自己的密钥，勿公开分享"
       },
       "model": {
         "description": "生图模型",
