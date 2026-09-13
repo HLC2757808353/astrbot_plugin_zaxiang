@@ -2,8 +2,12 @@
 
 供 LLM 通过 llm_tool 调用，把本地文件直接发送给用户。
 支持代码文件、md、文本、图片等任意文件，受最大体积限制（默认 10MB）。
+
+对 aiocqhttp（QQ/NapCat）平台使用 base64 直传，避免 NapCat 与 AstrBot
+文件系统不共享导致读不到本地路径的问题。
 """
 
+import base64
 import os
 from pathlib import Path
 from typing import Optional
@@ -65,6 +69,36 @@ class FileSenderManager:
             )
         return None
 
+    async def _send_via_base64(self, event, file_path: Path) -> None:
+        """对 aiocqhttp 平台用 base64 直传文件，避免 NapCat 读不到 AstrBot 容器内路径。"""
+        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+            AiocqhttpMessageEvent,
+        )
+
+        if not isinstance(event, AiocqhttpMessageEvent):
+            raise TypeError("base64 发送仅支持 aiocqhttp 平台")
+
+        data = file_path.read_bytes()
+        b64 = base64.b64encode(data).decode()
+        file_seg = {
+            "type": "file",
+            "data": {
+                "file": f"base64://{b64}",
+                "name": file_path.name,
+            },
+        }
+        bot = event.bot
+        group_id = getattr(event.message_obj, "group_id", None)
+        if group_id:
+            await bot.api.call_action(
+                "send_group_msg", group_id=int(group_id), message=[file_seg]
+            )
+        else:
+            user_id = event.get_sender_id()
+            await bot.api.call_action(
+                "send_private_msg", user_id=int(user_id), message=[file_seg]
+            )
+
     async def send(self, event, path: str) -> Optional[str]:
         """校验并发送文件。成功返回 None，失败返回错误信息字符串。"""
         err = self.validate(path)
@@ -74,7 +108,16 @@ class FileSenderManager:
         if not file_path.is_absolute():
             file_path = Path(os.path.abspath(file_path))
         try:
-            await event.send(MessageChain([File(name=file_path.name, file=str(file_path))]))
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+                AiocqhttpMessageEvent,
+            )
+
+            if isinstance(event, AiocqhttpMessageEvent):
+                # base64 直传，不依赖文件系统共享
+                await self._send_via_base64(event, file_path)
+            else:
+                # 其他平台回退到 File 组件
+                await event.send(MessageChain([File(name=file_path.name, file=str(file_path))]))
             logger.info(f"已发送文件：{file_path}（{file_path.stat().st_size} 字节）")
             return None
         except Exception as e:
