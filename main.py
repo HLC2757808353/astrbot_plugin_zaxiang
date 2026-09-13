@@ -10,7 +10,10 @@ from astrbot.api.web import error_response, json_response, request
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.core.star.star_tools import StarTools
-from .modules import ColdViolenceManager, MuteTracker, PokeReaction, WordFilter, ImageGenManager
+from .modules import (
+    ColdViolenceManager, MuteTracker, PokeReaction, WordFilter,
+    ImageGenManager, FileSenderManager,
+)
 
 
 @register("astrbot_plugin_zaxiang", "引灯续昼", "引灯续昼杂项插件", "1.0.0")
@@ -22,6 +25,7 @@ class ZaxiangPlugin(Star):
         self.poke_reaction = PokeReaction()
         self.word_filter = WordFilter()
         self.image_gen = ImageGenManager()
+        self.file_sender = FileSenderManager()
         self.config = config or {}
     
     async def initialize(self):
@@ -30,6 +34,7 @@ class ZaxiangPlugin(Star):
         self.poke_reaction.initialize(self.config)
         self.word_filter.initialize(self.config)
         self.image_gen.initialize(self.config)
+        self.file_sender.initialize(self.config)
 
         # 图片落盘目录：data/plugin_data/astrbot_plugin_zaxiang/images
         try:
@@ -487,3 +492,34 @@ class ZaxiangPlugin(Star):
         if not ok:
             return error_response("记录不存在", status_code=404)
         return json_response({"deleted": True})
+
+    # ---------------- 文件发送 ----------------
+
+    @filter.llm_tool(name="send_file")
+    async def send_file_tool(
+        self, event: AstrMessageEvent, path: str, description: str = ""
+    ) -> MessageEventResult:
+        '''把本地文件直接发送给用户。适用于用户需要接收代码文件、md/文本、配置文件、图片、音视频等场景，或者你把文件下载/生成本地文件后需要交给用户时。文件必须存在于本机，且大小不能超过限制（默认 10MB，可在插件配置里调整）。
+
+        Args:
+            path(string): 要发送的文件的完整本地路径（绝对路径），例如 /tmp/xxx.py 或 C:/xxx/xxx.md。路径前可带 file:// 前缀。
+            description(string): 对文件内容的简短说明（可选），可帮助用户了解这是什么文件。
+        '''
+        mgr = self.file_sender
+        if not mgr.is_enabled():
+            yield "文件发送功能当前未启用。"
+            return
+        if not path or not str(path).strip():
+            yield "缺少要发送的文件路径。"
+            return
+        # 兼容 file:// 前缀
+        raw_path = str(path).strip()
+        if raw_path.startswith("file://"):
+            from urllib.parse import unquote, urlparse
+            raw_path = unquote(urlparse(raw_path).path)
+        err = await mgr.send(event, raw_path)
+        if err:
+            # 只把错误原因回传给 LLM，由 LLM 决定怎么跟用户说
+            yield err
+            return
+        yield "文件已经直接发送给用户了。" + (f"（说明：{description}）" if description else "")

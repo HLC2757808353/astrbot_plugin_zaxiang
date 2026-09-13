@@ -120,7 +120,8 @@
         "description": "生图模型",
         "type": "string",
         "default": "gpt-image-2.5-flare",
-        "hint": "支持文生图/图生图的模型名，如 gpt-image-2.5-flare"
+        "options": ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"],
+        "hint": "中转站当前可用的文生图/图生图模型"
       },
       "size": {
         "description": "默认生成尺寸",
@@ -133,6 +134,25 @@
         "type": "int",
         "default": 7,
         "hint": "超过该天数的生成图片会被自动清理（每日扫描一次）"
+      }
+    }
+  },
+  "file_sender": {
+    "description": "文件发送配置",
+    "type": "object",
+    "hint": "AI 将本地文件直接发送给用户，受最大体积限制",
+    "items": {
+      "enabled": {
+        "description": "是否启用文件发送",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后 AI 不会调用文件发送工具"
+      },
+      "max_size_mb": {
+        "description": "最大传输体积（MB）",
+        "type": "float",
+        "default": 10,
+        "hint": "超过该体积的文件 AI 无法发送，默认 10MB"
       }
     }
   }
