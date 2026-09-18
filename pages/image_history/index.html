@@ -167,7 +167,7 @@
         if (!confirm('确定删除这条生成记录及其文件吗？')) return;
         var id = btn.dataset.id;
         try {
-          await bridge.apiPost('delete', { id: Number(id) });
+          await bridge.apiPost('image_history/delete', { id: Number(id) });
           load();
         } catch (e) {
           alert('删除失败：' + e.message);
@@ -181,7 +181,7 @@
     lightboxImg.src = '';
     lightboxPrompt.textContent = '加载中…';
     try {
-      var res = await bridge.apiGet('file/' + id);
+      var res = await bridge.apiGet('image_history/file/' + id);
       lightboxImg.src = res.data_url || '';
       lightboxPrompt.textContent = res.prompt || '';
     } catch (e) {
@@ -192,7 +192,7 @@
   async function load() {
     loading.style.display = 'block';
     try {
-      var res = await bridge.apiGet('list');
+      var res = await bridge.apiGet('image_history/list');
       render(res.records || []);
     } catch (e) {
       loading.style.display = 'none';

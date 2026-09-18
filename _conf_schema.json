@@ -155,5 +155,30 @@
         "hint": "超过该体积的文件 AI 无法发送，默认 10MB"
       }
     }
+  },
+  "money": {
+    "description": "挣钱（收款码）配置",
+    "type": "object",
+    "hint": "AI 在用户明确要求时把收款二维码发出来",
+    "items": {
+      "enabled": {
+        "description": "是否启用挣钱功能",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后 AI 不会调用收款码工具"
+      },
+      "qr_filename": {
+        "description": "二维码文件名",
+        "type": "string",
+        "default": "qrcode.png",
+        "hint": "在插件页面「收款码设置」上传后自动生成，一般无需修改"
+      },
+      "allowed_ids": {
+        "description": "允许触发的用户ID列表",
+        "type": "list",
+        "default": [],
+        "hint": "只有此列表中的用户能让 AI 发收款码；留空则谁都不能触发（安全优先）"
+      }
+    }
   }
 }

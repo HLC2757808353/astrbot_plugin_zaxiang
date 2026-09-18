@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>收款码设置</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #1f2329;
+    --muted: #8a919f;
+    --border: #e4e7ed;
+    --accent: #3b82f6;
+    --danger: #ef4444;
+    --radius: 10px;
+  }
+  [data-theme="dark"] {
+    --bg: #15171c;
+    --card: #1e2128;
+    --text: #e6e8ec;
+    --muted: #9aa1ad;
+    --border: #2c303a;
+    --accent: #60a5fa;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+  }
+  .header { margin-bottom: 18px; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header p { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px; display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap;
+  }
+  .preview {
+    width: 180px; height: 180px; border-radius: 8px; border: 1px dashed var(--border);
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+    background: var(--bg); flex-shrink: 0;
+  }
+  .preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .preview .ph { font-size: 13px; color: var(--muted); text-align: center; padding: 10px; }
+  .info { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 8px; }
+  .row { font-size: 13px; }
+  .row .k { color: var(--muted); margin-right: 6px; }
+  .actions { display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+  .btn {
+    border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px;
+    cursor: pointer; font-family: inherit;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .btn-danger:hover { background: rgba(239, 68, 68, 0.08); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .drop {
+    margin-top: 14px; border: 1px dashed var(--border); border-radius: var(--radius);
+    padding: 18px; text-align: center; font-size: 13px; color: var(--muted);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .drop.over { border-color: var(--accent); background: rgba(96, 165, 250, 0.08); color: var(--accent); }
+  .tip {
+    margin-top: 18px; font-size: 13px; color: var(--muted); line-height: 1.7;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 18px;
+  }
+  .tip code {
+    background: rgba(127,127,127,0.15); padding: 1px 6px; border-radius: 4px;
+    font-size: 12px;
+  }
+  .msg { font-size: 13px; margin-top: 10px; }
+  .msg.err { color: var(--danger); }
+  .msg.ok { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>收款码设置</h1>
+    <p>上传一张收款二维码图片，之后在聊天里让 AI「去挣点钱」，它就会把这张码发出来。</p>
+  </div>
+
+  <div class="card">
+    <div class="preview" id="preview">
+      <div class="ph">尚未上传</div>
+    </div>
+    <div class="info">
+      <div class="row"><span class="k">文件名</span><span id="fname">—</span></div>
+      <div class="row"><span class="k">大小</span><span id="fsize">—</span></div>
+      <div class="row"><span class="k">上传时间</span><span id="ftime">—</span></div>
+      <div class="actions">
+        <button class="btn btn-primary" id="pick">上传 / 更换二维码</button>
+        <button class="btn btn-danger" id="del" disabled>删除</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+  </div>
+
+  <div class="drop" id="drop">把二维码图片拖到这里，或点上面的按钮选择文件（支持 png / jpg / webp，5MB 以内）</div>
+
+  <div class="tip">
+    触发方式示例：<code>去给我挣 50 块钱</code>、<code>请我喝杯奶茶</code>。<br>
+    只有配置里 <code>allowed_ids</code> 名单中的用户能触发；名单为空时任何人都无法触发。
+  </div>
+
+  <input type="file" id="file" accept="image/png,image/jpeg,image/webp" style="display:none">
+
+<script src="/api/plugin/page/bridge-sdk.js"></script>
+<script>
+(function () {
+  var bridge = window.AstrBotPluginPage;
+  var preview = document.getElementById('preview');
+  var fname = document.getElementById('fname');
+  var fsize = document.getElementById('fsize');
+  var ftime = document.getElementById('ftime');
+  var delBtn = document.getElementById('del');
+  var pickBtn = document.getElementById('pick');
+  var drop = document.getElementById('drop');
+  var fileInput = document.getElementById('file');
+  var msg = document.getElementById('msg');
+
+  function setMsg(text, ok) {
+    msg.textContent = text || '';
+    msg.className = 'msg ' + (ok ? 'ok' : 'err');
+  }
+
+  function human(bytes) {
+    if (!bytes && bytes !== 0) return '—';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  async function load() {
+    try {
+      var res = await bridge.apiGet('qrcode/info');
+      if (res && res.exists) {
+        preview.innerHTML = '<img src="' + esc(res.preview || '') + '" alt="收款二维码">';
+        fname.textContent = res.filename || '—';
+        fsize.textContent = human(res.size);
+        ftime.textContent = res.uploaded_at || '—';
+        delBtn.disabled = false;
+      } else {
+        preview.innerHTML = '<div class="ph">尚未上传</div>';
+        fname.textContent = '—';
+        fsize.textContent = '—';
+        ftime.textContent = '—';
+        delBtn.disabled = true;
+      }
+    } catch (e) {
+      setMsg('读取状态失败：' + e.message);
+    }
+  }
+
+  async function doUpload(file) {
+    if (!file) return;
+    setMsg('上传中…', true);
+    try {
+      await bridge.upload('qrcode/upload', file);
+      setMsg('上传成功，已生效', true);
+      await load();
+    } catch (e) {
+      setMsg('上传失败：' + e.message);
+    }
+  }
+
+  pickBtn.addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function () {
+    if (fileInput.files && fileInput.files[0]) {
+      doUpload(fileInput.files[0]);
+      fileInput.value = '';
+    }
+  });
+
+  delBtn.addEventListener('click', async function () {
+    if (!confirm('确定删除已上传的收款二维码吗？')) return;
+    try {
+      await bridge.apiPost('qrcode/delete', {});
+      setMsg('已删除', true);
+      await load();
+    } catch (e) {
+      setMsg('删除失败：' + e.message);
+    }
+  });
+
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) {
+      e.preventDefault();
+      drop.classList.add('over');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) {
+      e.preventDefault();
+      drop.classList.remove('over');
+    });
+  });
+  drop.addEventListener('drop', function (e) {
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) doUpload(f);
+  });
+
+  async function init() {
+    try { await bridge.ready(); } catch (e) { /* bridge 不可用时也继续 */ }
+    load();
+  }
+  init();
+})();
+</script>
+</body>
+</html>

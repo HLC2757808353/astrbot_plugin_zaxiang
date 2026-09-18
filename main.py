@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
@@ -6,13 +8,13 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.provider import LLMResponse
 from astrbot.api import logger
-from astrbot.api.web import error_response, json_response, request
+from astrbot.api.web import PluginUploadFile, error_response, json_response, request
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.core.star.star_tools import StarTools
 from .modules import (
     ColdViolenceManager, MuteTracker, PokeReaction, WordFilter,
-    ImageGenManager, FileSenderManager,
+    ImageGenManager, FileSenderManager, MoneyManager,
 )
 
 
@@ -26,6 +28,7 @@ class ZaxiangPlugin(Star):
         self.word_filter = WordFilter()
         self.image_gen = ImageGenManager()
         self.file_sender = FileSenderManager()
+        self.money = MoneyManager()
         self.config = config or {}
     
     async def initialize(self):
@@ -35,31 +38,45 @@ class ZaxiangPlugin(Star):
         self.word_filter.initialize(self.config)
         self.image_gen.initialize(self.config)
         self.file_sender.initialize(self.config)
+        self.money.initialize(self.config)
 
-        # 图片落盘目录：data/plugin_data/astrbot_plugin_zaxiang/images
+        # 插件数据目录：data/plugin_data/astrbot_plugin_zaxiang
         try:
             plugin_data_dir = StarTools.get_data_dir("astrbot_plugin_zaxiang")
             self.image_gen.set_data_dir(plugin_data_dir / "images")
+            self.money.set_data_dir(plugin_data_dir)
         except Exception as e:
-            logger.error(f"初始化图片保存目录失败: {e}")
+            logger.error(f"初始化插件数据目录失败: {e}")
 
         try:
             await self.image_gen.ensure_table(self.context.get_db())
         except Exception as e:
             logger.error(f"初始化图片生成数据表失败: {e}")
 
-        # 注册复盘页面用到的 Web API
+        # 注册插件页面用到的 Web API（路由必须带插件名前缀）
         self.context.register_web_api(
-            "zaxiang_image_history/list", self._web_hist_list,
+            "astrbot_plugin_zaxiang/image_history/list", self._web_hist_list,
             ["GET"], "获取 AI 生成图片历史列表",
         )
         self.context.register_web_api(
-            "zaxiang_image_history/file/<id>", self._web_hist_file,
+            "astrbot_plugin_zaxiang/image_history/file/<id>", self._web_hist_file,
             ["GET"], "获取单张 AI 生成图片",
         )
         self.context.register_web_api(
-            "zaxiang_image_history/delete", self._web_hist_delete,
+            "astrbot_plugin_zaxiang/image_history/delete", self._web_hist_delete,
             ["POST"], "删除一条 AI 生成图片记录",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_zaxiang/qrcode/info", self._web_qrcode_info,
+            ["GET"], "获取收款二维码信息",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_zaxiang/qrcode/upload", self._web_qrcode_upload,
+            ["POST"], "上传收款二维码",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_zaxiang/qrcode/delete", self._web_qrcode_delete,
+            ["POST"], "删除收款二维码",
         )
 
         await self.cold_violence_mgr.start_cleanup_task()
@@ -431,14 +448,16 @@ class ZaxiangPlugin(Star):
 
     @staticmethod
     def _make_full_data_url(image_path: str) -> str:
-        """把原图转成 base64 data URL。失败返回空串。"""
+        """把图片转成 base64 data URL（mime 按扩展名判断）。失败返回空串。"""
         try:
             import base64 as b64
+            import mimetypes
             if not os.path.exists(image_path):
                 return ""
+            mime = mimetypes.guess_type(image_path)[0] or "image/png"
             with open(image_path, "rb") as f:
                 data = b64.b64encode(f.read()).decode()
-            return f"data:image/png;base64,{data}"
+            return f"data:{mime};base64,{data}"
         except Exception:
             return ""
 
@@ -523,3 +542,114 @@ class ZaxiangPlugin(Star):
             yield err
             return
         yield "文件已经直接发送给用户了。" + (f"（说明：{description}）" if description else "")
+
+    # ---------------- 收款码 Web API ----------------
+
+    async def _web_qrcode_info(self) -> Any:
+        path = self.money.find_qrcode()
+        if not path:
+            return json_response({"exists": False})
+        try:
+            stat = path.stat()
+        except OSError:
+            return json_response({"exists": False})
+        return json_response(
+            {
+                "exists": True,
+                "filename": path.name,
+                "size": stat.st_size,
+                "uploaded_at": datetime.fromtimestamp(stat.st_mtime).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "preview": self._make_full_data_url(str(path)),
+            }
+        )
+
+    async def _web_qrcode_upload(self) -> Any:
+        files = await request.files()
+        upload = files.get("file")
+        if not isinstance(upload, PluginUploadFile):
+            return error_response("缺少上传文件", status_code=400)
+        if not self.money.data_dir:
+            return error_response("插件数据目录未初始化", status_code=500)
+
+        ext = Path(upload.filename or "").suffix.lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+            return error_response("仅支持 png/jpg/jpeg/webp 格式的图片", status_code=400)
+
+        try:
+            data = await upload.read(-1)
+        except Exception as e:
+            logger.error(f"读取上传文件失败: {e}")
+            return error_response("读取上传文件失败", status_code=400)
+        if not data:
+            return error_response("上传文件为空", status_code=400)
+        if len(data) > 5 * 1024 * 1024:
+            return error_response("图片过大，请上传 5MB 以内的二维码图片", status_code=400)
+
+        # 确认是有效图片
+        try:
+            from io import BytesIO
+            from PIL import Image as PILImage
+
+            PILImage.open(BytesIO(data)).verify()
+        except Exception:
+            return error_response("文件不是有效的图片", status_code=400)
+
+        target = self.money.data_dir / f"qrcode{ext}"
+        try:
+            # 清理其他格式的旧二维码，避免探测到多份
+            for old_ext in (".png", ".jpg", ".jpeg", ".webp"):
+                old = self.money.data_dir / f"qrcode{old_ext}"
+                if old != target and old.is_file():
+                    old.unlink()
+            target.write_bytes(data)
+        except OSError as e:
+            logger.error(f"保存二维码失败: {e}")
+            return error_response("保存二维码失败", status_code=500)
+
+        logger.info(f"收款二维码已更新：{target}")
+        return json_response({"saved": True, "filename": target.name})
+
+    async def _web_qrcode_delete(self) -> Any:
+        path = self.money.find_qrcode()
+        if not path:
+            return error_response("当前没有已上传的二维码", status_code=404)
+        try:
+            path.unlink()
+        except OSError as e:
+            logger.error(f"删除二维码失败: {e}")
+            return error_response("删除失败", status_code=500)
+        logger.info(f"收款二维码已删除：{path}")
+        return json_response({"deleted": True})
+
+    # ---------------- 挣钱（收款码） ----------------
+
+    @filter.llm_tool(name="earn_money")
+    async def earn_money_tool(
+        self, event: AstrMessageEvent, amount: str = "", note: str = ""
+    ) -> MessageEventResult:
+        '''把预先配置好的收款二维码发给用户。仅当用户明确提出要给你钱、打赏、赞助、请你喝奶茶、让你去"挣钱"这类意图时才调用；严禁在用户没有明确要求时主动发送，也不要自行发起索要钱财的话题。
+
+        Args:
+            amount(string): 用户提到的金额，例如"50"或"50块"，没提到就留空。
+            note(string): 可选的补充说明，用来给你自己稍后组织语言提供素材。
+        '''
+        mgr = self.money
+        if not mgr.is_enabled():
+            yield "挣钱功能当前未启用。"
+            return
+        if not mgr.has_permission(event.get_sender_id()):
+            yield "当前用户没有触发挣钱功能的权限。"
+            return
+        err = await mgr.send_qrcode(event)
+        if err:
+            # 只把原因回传给 LLM，由 LLM 决定怎么跟用户说
+            yield err
+            return
+        info = "收款二维码已经直接发送给用户了。"
+        if amount:
+            info += f"用户提到的金额：{amount}。"
+        if note:
+            info += f"补充素材：{note}。"
+        yield info
