@@ -128,6 +128,12 @@
         "default": "1024x1024",
         "hint": "可选 1024x1024 / 1024x1536 / 1536x1024"
       },
+      "timeout": {
+        "description": "绘图请求超时（秒）",
+        "type": "int",
+        "default": 120,
+        "hint": "每次生图请求的超时时间，默认 120 秒。网络慢或服务波动时可适当调大"
+      },
       "retention_days": {
         "description": "图片保留天数",
         "type": "int",

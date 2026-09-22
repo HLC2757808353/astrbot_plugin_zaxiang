@@ -24,6 +24,14 @@ except ImportError:
     aiohttp = None  # type: ignore[assignment]
 
 
+class ApiError(Exception):
+    """绘图 API 调用错误，retryable 表示是否值得重试。"""
+
+    def __init__(self, message: str, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
+
 class ImageGenManager:
     """管理绘图 API 调用、本地落盘、数据库记录与过期清理。"""
 
@@ -33,6 +41,7 @@ class ImageGenManager:
         "api_key": "",  # 在 WebUI 插件配置里填写，勿写入代码
         "model": "",  # 在 WebUI 插件配置里填写，例如 gpt-image-2.5
         "size": "1024x1024",
+        "timeout": 120,  # 绘图 API 请求超时（秒）
         "retention_days": 7,
     }
 
@@ -54,6 +63,10 @@ class ImageGenManager:
         merged["model"] = str(merged.get("model") or self.DEFAULT_CONFIG["model"]).strip()
         merged["size"] = str(merged.get("size") or self.DEFAULT_CONFIG["size"]).strip()
         self.config = merged
+        try:
+            self.config["timeout"] = max(1, int(self.config.get("timeout", 120)))
+        except (TypeError, ValueError):
+            self.config["timeout"] = 120
         try:
             self.config["retention_days"] = max(1, int(self.config.get("retention_days", 7)))
         except (TypeError, ValueError):
@@ -93,6 +106,9 @@ class ImageGenManager:
     async def generate(self, prompt: str, size: str = "") -> dict:
         """文生图。返回 {"path": ..., "revised_prompt": ...}，失败抛出异常。"""
         size = self._normalize_size(size)
+        return await self._with_retry(lambda: self._api_generate(prompt, size))
+
+    async def _api_generate(self, prompt: str, size: str) -> dict:
         payload = {
             "model": self.config["model"],
             "prompt": prompt,
@@ -105,6 +121,9 @@ class ImageGenManager:
     async def edit(self, prompt: str, image_path: str, size: str = "") -> dict:
         """图生图。image_path 为参考图本地路径，multipart 提交。"""
         size = self._normalize_size(size)
+        return await self._with_retry(lambda: self._api_edit(prompt, image_path, size))
+
+    async def _api_edit(self, prompt: str, image_path: str, size: str) -> dict:
         data = {
             "model": self.config["model"],
             "prompt": prompt,
@@ -117,6 +136,21 @@ class ImageGenManager:
         finally:
             files["image"][1].close()
         return await self._handle_image_response(resp)
+
+    async def _with_retry(self, factory) -> dict:
+        """最多尝试 3 次；仅对可重试的 ApiError 重试，其他错误直接抛出。"""
+        max_attempts = 3
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return await factory()
+            except ApiError as e:
+                last_error = e
+                if not e.retryable or attempt >= max_attempts:
+                    raise
+                logger.warning(f"绘图 API 调用失败(第{attempt}次)，进行重试: {e}")
+                await asyncio.sleep(2)
+        raise last_error
 
     # ---------- 内部实现 ----------
 
@@ -138,26 +172,36 @@ class ImageGenManager:
         url = f"{api_base}{endpoint}"
         headers = {"Authorization": f"Bearer {api_key}"}
 
-        timeout = aiohttp.ClientTimeout(total=600)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            if files:
-                async with session.post(url, headers=headers, data=data, files=files) as resp:
-                    body = await resp.text()
-            elif payload is not None:
-                headers["Content-Type"] = "application/json"
-                async with session.post(url, headers=headers, json=payload) as resp:
-                    body = await resp.text()
-            else:
-                raise ValueError("_call_api 需要 payload 或 files")
+        timeout_sec = int(self.config.get("timeout", 120))
+        timeout = aiohttp.ClientTimeout(total=timeout_sec)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if files:
+                    async with session.post(url, headers=headers, data=data, files=files) as resp:
+                        body = await resp.text()
+                elif payload is not None:
+                    headers["Content-Type"] = "application/json"
+                    async with session.post(url, headers=headers, json=payload) as resp:
+                        body = await resp.text()
+                else:
+                    raise ValueError("_call_api 需要 payload 或 files")
 
-            if resp.status != 200:
-                logger.error(f"绘图 API 返回 {resp.status}: {body[:500]}")
-                raise RuntimeError(f"绘图 API 返回错误状态 {resp.status}")
-            try:
-                return json.loads(body)
-            except json.JSONDecodeError as e:
-                logger.error(f"绘图 API 响应不是合法 JSON: {body[:200]}")
-                raise RuntimeError("绘图 API 响应解析失败") from e
+                if resp.status != 200:
+                    logger.error(f"绘图 API 返回 {resp.status}: {body[:500]}")
+                    # 网络/服务端/限流类错误可重试；鉴权、欠费、资源不存在等 4xx 重试无意义
+                    retryable = resp.status in (408, 429, 500, 502, 503, 504, 520)
+                    raise ApiError(f"绘图 API 返回错误状态 {resp.status}", retryable=retryable)
+                try:
+                    return json.loads(body)
+                except json.JSONDecodeError as e:
+                    logger.error(f"绘图 API 响应不是合法 JSON: {body[:200]}")
+                    raise RuntimeError("绘图 API 响应解析失败") from e
+        except ApiError:
+            raise
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            # 连接超时/断连视为可重试
+            logger.error(f"绘图 API 请求异常: {e}")
+            raise ApiError(f"绘图 API 请求异常：{e}", retryable=True) from e
 
     async def _handle_image_response(self, resp: dict) -> dict:
         data = resp.get("data") or []
