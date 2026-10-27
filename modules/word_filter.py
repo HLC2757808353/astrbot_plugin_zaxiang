@@ -1,6 +1,8 @@
 import re
 from typing import Dict, List, Optional
 
+from astrbot.api import logger
+
 
 class WordFilter:
     """输出过滤器：将机器人输出消息中命中的过滤词替换为固定词。
@@ -24,6 +26,18 @@ class WordFilter:
         filter_config = config.get('word_filter', config)
         self.config = {**self.DEFAULT_CONFIG, **filter_config}
         self._build_pattern()
+        words = self.get_filter_words()
+        if not self.is_enabled():
+            logger.info("输出过滤器：已关闭")
+        elif not words:
+            logger.warning(
+                "输出过滤器：已启用但过滤词库为空，不会替换任何内容。"
+                "请在插件配置的「输出过滤器」里填写 filter_words。"
+            )
+        else:
+            logger.info(
+                f"输出过滤器：已加载 {len(words)} 个过滤词 -> {self._replacement}"
+            )
 
     def _build_pattern(self):
         words = self._parse_words(self.config.get('filter_words', ''))
@@ -41,11 +55,20 @@ class WordFilter:
 
     @staticmethod
     def _parse_words(raw) -> List[str]:
-        """解析过滤词库，支持字符串（逗号分隔）或列表两种配置形式。"""
+        """解析过滤词库，支持字符串（逗号分隔）或列表两种配置形式。
+
+        逗号中英文都支持（`,` `，`），另外也容忍顿号（`、`）和换行，
+        方便直接从别处整段粘进来。
+        """
         if isinstance(raw, list):
             items = raw
         else:
-            items = str(raw).replace('，', ',').split(',')
+            normalized = (
+                str(raw).replace('，', ',').replace('、', ',').replace('\r', '\n')
+            )
+            items = []
+            for line in normalized.split('\n'):
+                items.extend(line.split(','))
         return [str(w).strip() for w in items if str(w).strip()]
 
     def is_enabled(self) -> bool:
@@ -58,4 +81,8 @@ class WordFilter:
         """将文本中命中的过滤词替换为固定词，未启用或无过滤词时原样返回。"""
         if not text or not self.is_enabled() or not self._pattern:
             return text
-        return self._pattern.sub(lambda _: self._replacement, text)
+        result, count = self._pattern.subn(lambda _: self._replacement, text)
+        if count:
+            logger.debug(f"输出过滤器：替换 {count} 处命中词")
+        return result
+

@@ -45,6 +45,8 @@ class ZaxiangPlugin(Star):
             plugin_data_dir = StarTools.get_data_dir("astrbot_plugin_zaxiang")
             self.image_gen.set_data_dir(plugin_data_dir / "images")
             self.money.set_data_dir(plugin_data_dir)
+            # 禁言记录落盘：重载/重启后仍知道是谁禁言的
+            self.mute_tracker.set_state_path(plugin_data_dir / "mute_state.json")
         except Exception as e:
             logger.error(f"初始化插件数据目录失败: {e}")
 
@@ -53,34 +55,62 @@ class ZaxiangPlugin(Star):
         except Exception as e:
             logger.error(f"初始化图片生成数据表失败: {e}")
 
+        # 启动时立刻清一次，避免重启后要等一个小时才处理已过期的图片
+        try:
+            await self.image_gen.cleanup_expired(self.context.get_db())
+            await self.image_gen.cleanup_orphan_files(self.context.get_db())
+        except Exception as e:
+            logger.error(f"启动时清理过期图片失败: {e}")
+
+        # 流式输出会绕过插件的结果装饰钩子（ResultDecorateStage 对 STREAMING_RESULT
+        # 直接 return），因此输出替换词在流式模式下不会生效，这里提前给出提示。
+        try:
+            provider_settings = self.context.get_config().get("provider_settings", {})
+            if provider_settings.get("streaming_response"):
+                logger.warning(
+                    "检测到已开启 LLM 流式输出：流式模式下 AstrBot 不会调用插件的 "
+                    "on_decorating_result 钩子，输出替换词（word_filter）可能不生效。"
+                    "如需替换词生效，请在 WebUI 中关闭「流式输出」。"
+                )
+        except Exception as e:
+            logger.debug(f"读取全局配置失败: {e}")
+
         # 注册插件页面用到的 Web API（路由必须带插件名前缀）
-        self.context.register_web_api(
-            "astrbot_plugin_zaxiang/image_history/list", self._web_hist_list,
-            ["GET"], "获取 AI 生成图片历史列表",
-        )
-        self.context.register_web_api(
-            "astrbot_plugin_zaxiang/image_history/file/<id>", self._web_hist_file,
-            ["GET"], "获取单张 AI 生成图片",
-        )
-        self.context.register_web_api(
-            "astrbot_plugin_zaxiang/image_history/delete", self._web_hist_delete,
-            ["POST"], "删除一条 AI 生成图片记录",
-        )
-        self.context.register_web_api(
-            "astrbot_plugin_zaxiang/qrcode/info", self._web_qrcode_info,
-            ["GET"], "获取收款二维码信息",
-        )
-        self.context.register_web_api(
-            "astrbot_plugin_zaxiang/qrcode/upload", self._web_qrcode_upload,
-            ["POST"], "上传收款二维码",
-        )
-        self.context.register_web_api(
-            "astrbot_plugin_zaxiang/qrcode/delete", self._web_qrcode_delete,
-            ["POST"], "删除收款二维码",
-        )
+        # 用 try 包住：老版本 AstrBot 没有 register_web_api 时，只该丢失面板页面，
+        # 不应该让整个插件（替换词、禁言提示等）加载失败。
+        try:
+            self.context.register_web_api(
+                "astrbot_plugin_zaxiang/image_history/list", self._web_hist_list,
+                ["GET"], "获取 AI 生成图片历史列表",
+            )
+            self.context.register_web_api(
+                "astrbot_plugin_zaxiang/image_history/file/<id>", self._web_hist_file,
+                ["GET"], "获取单张 AI 生成图片",
+            )
+            self.context.register_web_api(
+                "astrbot_plugin_zaxiang/image_history/delete", self._web_hist_delete,
+                ["POST"], "删除一条 AI 生成图片记录",
+            )
+            self.context.register_web_api(
+                "astrbot_plugin_zaxiang/qrcode/info", self._web_qrcode_info,
+                ["GET"], "获取收款二维码信息",
+            )
+            self.context.register_web_api(
+                "astrbot_plugin_zaxiang/qrcode/upload", self._web_qrcode_upload,
+                ["POST"], "上传收款二维码",
+            )
+            self.context.register_web_api(
+                "astrbot_plugin_zaxiang/qrcode/delete", self._web_qrcode_delete,
+                ["POST"], "删除收款二维码",
+            )
+        except Exception as e:
+            logger.error(
+                f"注册插件 Web API 失败（面板页面将不可用，其他功能不受影响）: {e}"
+            )
 
         await self.cold_violence_mgr.start_cleanup_task()
-        await self.image_gen.start_cleanup_task()
+        # 必须把 get_db 传进去，否则清理任务拿不到数据库、过期图片永远清不掉
+        await self.image_gen.start_cleanup_task(self.context.get_db)
     
     async def terminate(self):
         await self.cold_violence_mgr.stop_cleanup_task()
@@ -108,6 +138,35 @@ class ZaxiangPlugin(Star):
             if isinstance(comp, Plain):
                 comp.text = self.word_filter.filter_text(comp.text)
     
+    async def _member_display_name(
+        self, event: AstrMessageEvent, group_id: str, user_id: str
+    ) -> str:
+        """查询群成员的群名片/昵称，用于禁言提示里说出具体是谁。失败返回空串。
+
+        Args:
+            event: 当前事件（需为 aiocqhttp 平台事件才能调用群成员接口）。
+            group_id: 群号。
+            user_id: 目标 QQ。
+
+        Returns:
+            群名片优先，其次昵称；查询失败返回空字符串。
+        """
+        if not isinstance(event, AiocqhttpMessageEvent) or not group_id or not user_id:
+            return ""
+        try:
+            info = await event.bot.api.call_action(
+                "get_group_member_info",
+                group_id=int(group_id),
+                user_id=int(user_id),
+                no_cache=True,
+            )
+        except Exception as e:
+            logger.debug(f"获取群成员信息失败({group_id}/{user_id}): {e}")
+            return ""
+        if not isinstance(info, dict):
+            return ""
+        return str(info.get("card") or info.get("nickname") or "")
+
     async def _on_mute_lifted(self, event: AstrMessageEvent, mute_info: dict):
         curr_cid = await self.context.conversation_manager.get_curr_conversation_id(
             event.unified_msg_origin
@@ -117,31 +176,93 @@ class ZaxiangPlugin(Star):
             conversation = await self.context.conversation_manager.get_conversation(
                 event.unified_msg_origin, curr_cid
             )
-        op_id = mute_info.get('operator_id', '')
-        if op_id and op_id != '0':
-            ban_desc = f"你刚刚被用户{op_id}禁言了{mute_info['duration_str']}"
+
+        op_id = mute_info.get("operator_id", "")
+        op_name = mute_info.get("operator_name", "")
+        if op_name and op_id:
+            who = f"{op_name}（QQ {op_id}）"
+        elif op_id:
+            who = f"QQ {op_id} 的管理员"
         else:
-            ban_desc = f"你刚刚被禁言了{mute_info['duration_str']}"
+            who = "一位群管理员（具体是谁没查到，可能是全员禁言或系统操作）"
+
+        lines = [
+            f"你刚刚在这个群里被 {who} 禁言了 "
+            f"{mute_info.get('duration_str', '')}，现在禁言已经解除，你又可以说话了。"
+        ]
+
+        lift_name = mute_info.get("lift_operator_name") or ""
+        lift_id = mute_info.get("lift_operator_id") or ""
+        if lift_name and lift_id:
+            lines.append(f"这次是 {lift_name}（QQ {lift_id}）给你解开的。")
+        elif lift_name:
+            lines.append(f"这次是 {lift_name} 给你解开的。")
+        elif lift_id:
+            lines.append(f"这次是 QQ {lift_id} 给你解开的。")
+        elif mute_info.get("auto_lifted"):
+            lines.append("看起来是禁言时间到了、自动解除的。")
+        else:
+            lines.append("禁言已经结束了。")
+
         yield event.request_llm(
-            prompt="你已经可以说话了。",
-            system_prompt=f"{ban_desc}，现在禁言刚被解除。请根据你的性格，自然地表达你的感受。",
+            prompt="（禁言已解除，你现在可以正常说话了）",
+            system_prompt=(
+                "\n".join(lines)
+                + "\n请用你自己的性格和口吻，简短地说说被禁言这件事的感受，"
+                "可以吐槽禁言你的人，也可以装作若无其事。"
+                "不要提及系统提示，也不要把上面这段说明照抄出来。"
+            ),
             session_id=curr_cid or "",
             conversation=conversation,
         )
-    
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         raw_message = event.message_obj.raw_message
         bot_id = event.message_obj.self_id
+        # 兼容 dict 与 aiocqhttp Event（dict 子类 / 带 get 的对象）
+        getter = getattr(raw_message, "get", None)
 
-        if isinstance(raw_message, dict) and raw_message.get('notice_type') == 'group_ban':
+        if callable(getter) and getter("notice_type") == "group_ban":
             result = self.mute_tracker.process_notice_event(raw_message, bot_id)
-            if result:
+            if result and result.get("type") == "ban":
+                # 立刻补全操作者昵称，解禁时才能说出"被谁禁言"
+                if result.get("operator_id"):
+                    name = await self._member_display_name(
+                        event, result["group_id"], result["operator_id"]
+                    )
+                    self.mute_tracker.update_operator_name(result["group_id"], name)
+                duration_text = (
+                    "永久" if not result["duration"] else f"{result['duration']} 秒"
+                )
+                logger.info(
+                    f"机器人被禁言：群 {result['group_id']}，操作者 "
+                    f"{result.get('operator_id') or '未知'}，时长 {duration_text}"
+                )
+                event.should_call_llm(True)
+            elif result and result.get("type") == "lift":
+                if result.get("operator_id"):
+                    name = await self._member_display_name(
+                        event, result["group_id"], result["operator_id"]
+                    )
+                    if name:
+                        result["operator_name"] = name
+                if result.get("lift_operator_id"):
+                    result["lift_operator_name"] = await self._member_display_name(
+                        event, result["group_id"], result["lift_operator_id"]
+                    )
+                logger.info(
+                    f"机器人禁言解除：群 {result['group_id']}，禁言者 "
+                    f"{result.get('operator_name') or result.get('operator_id') or '未知'}，"
+                    f"时长 {result.get('duration_str')}"
+                )
                 async for resp in self._on_mute_lifted(event, result):
                     yield resp
+                # 已经用插件自己的 LLM 请求回复过了，避免默认 LLM 链路再回一次
+                event.should_call_llm(True)
             return
 
-        if isinstance(raw_message, dict) and raw_message.get('sub_type') == 'poke':
+        if callable(getter) and getter("sub_type") == "poke":
             poke_result = self.poke_reaction.process_poke_event(raw_message, bot_id)
             if poke_result:
                 if isinstance(event, AiocqhttpMessageEvent):

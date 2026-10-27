@@ -52,6 +52,7 @@ class ImageGenManager:
         self.config: dict = self.DEFAULT_CONFIG.copy()
         self._cleanup_task: Optional[asyncio.Task] = None
         self.data_dir: Optional[Path] = None
+        self._db_provider = None
 
     # ---------- 配置与生命周期 ----------
 
@@ -77,7 +78,16 @@ class ImageGenManager:
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
-    async def start_cleanup_task(self):
+    async def start_cleanup_task(self, db_provider=None):
+        """启动每日清理任务。
+
+        Args:
+            db_provider: 返回数据库对象（BaseDatabase）的可调用对象，
+                通常是 ``context.get_db``。不传的话清理任务拿不到数据库，
+                会导致过期图片永远清不掉。
+        """
+        if db_provider is not None:
+            self._db_provider = db_provider
         if self._cleanup_task is None or self._cleanup_task.done():
             self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
             logger.info("图片生成清理任务已启动")
@@ -91,11 +101,30 @@ class ImageGenManager:
                 pass
             logger.info("图片生成清理任务已停止")
 
+    # 定期清理间隔：每小时扫一次（按 expires_at 判断，开销很小）
+    CLEANUP_INTERVAL_SECONDS = 3600
+    # 启动后首次清理的延迟，避免和启动流程抢资源
+    FIRST_CLEANUP_DELAY_SECONDS = 60
+
     async def _periodic_cleanup(self):
+        first_round = True
         while True:
             try:
-                await asyncio.sleep(24 * 3600)
-                await self.cleanup_expired()
+                await asyncio.sleep(
+                    self.FIRST_CLEANUP_DELAY_SECONDS
+                    if first_round
+                    else self.CLEANUP_INTERVAL_SECONDS
+                )
+                db = self._db_provider() if self._db_provider else None
+                if db is None:
+                    logger.warning(
+                        "图片生成清理：没有数据库连接，本轮跳过（请在启动时传入 db_provider）"
+                    )
+                    first_round = False
+                    continue
+                await self.cleanup_expired(db)
+                await self.cleanup_orphan_files(db)
+                first_round = False
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -274,12 +303,25 @@ class ImageGenManager:
             },
         )
 
-    async def cleanup_expired(self, db=None):
-        """删除已过期的记录和对应图片文件。"""
+    async def cleanup_expired(self, db):
+        """删除已过期的记录以及对应的图片文件（真删，不是只删记录）。
+
+        文件删不掉（比如被占用）时会**保留记录**，下一轮继续重试，
+        避免出现"记录没了、文件还躺在磁盘上"的孤儿文件。
+
+        Args:
+            db: AstrBot 的数据库对象（``context.get_db()`` 的返回值）。
+
+        Returns:
+            (删除的记录数, 删除的文件数, 失败数)。
+        """
         if db is None:
-            return
+            return 0, 0, 0
         await self.ensure_table(db)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        removed_records = 0
+        removed_files = 0
+        failed = 0
         async with db.get_db() as session:
             result = await session.execute(
                 text("SELECT id, image_path FROM image_gen_records WHERE expires_at <= :now"),
@@ -288,18 +330,69 @@ class ImageGenManager:
             rows = result.fetchall()
             for row in rows:
                 rid, image_path = row
-                try:
-                    if image_path and os.path.exists(image_path):
-                        os.remove(image_path)
-                except OSError as e:
-                    logger.warning(f"删除过期图片失败 {image_path}: {e}")
+                if image_path:
+                    path = Path(image_path)
+                    if path.exists():
+                        try:
+                            await asyncio.to_thread(path.unlink)
+                            removed_files += 1
+                        except OSError as e:
+                            logger.warning(
+                                f"删除过期图片文件失败，保留记录下轮重试 {image_path}: {e}"
+                            )
+                            failed += 1
+                            continue
                 await session.execute(
                     text("DELETE FROM image_gen_records WHERE id = :rid"),
                     {"rid": rid},
                 )
+                removed_records += 1
             await session.commit()
-        if rows:
-            logger.info(f"图片生成清理：删除 {len(rows)} 条过期记录")
+        if removed_records or failed:
+            logger.info(
+                f"图片生成清理：删除 {removed_records} 条过期记录、"
+                f"{removed_files} 个文件，失败 {failed} 条（下轮重试）"
+            )
+        return removed_records, removed_files, failed
+
+    async def cleanup_orphan_files(self, db) -> int:
+        """清理 images 目录里超过保留期、且数据库里已没有记录的文件。
+
+        用于兜底：历史遗留的过期图片、写库失败留下的散落文件会被这里清掉。
+
+        Args:
+            db: AstrBot 的数据库对象。
+
+        Returns:
+            实际删除的文件数。
+        """
+        if not self.data_dir or not self.data_dir.is_dir():
+            return 0
+        await self.ensure_table(db)
+        cutoff = time.time() - self.config["retention_days"] * 86400
+
+        async with db.get_db() as session:
+            result = await session.execute(text("SELECT image_path FROM image_gen_records"))
+            referenced = {
+                os.path.normcase(os.path.abspath(str(path)))
+                for (path,) in result.fetchall()
+                if path
+            }
+
+        removed = 0
+        for file_path in self.data_dir.glob("*.png"):
+            try:
+                if file_path.stat().st_mtime > cutoff:
+                    continue
+                if os.path.normcase(str(file_path.resolve())) in referenced:
+                    continue
+                await asyncio.to_thread(file_path.unlink)
+                removed += 1
+            except OSError as e:
+                logger.warning(f"清理孤儿图片失败 {file_path}: {e}")
+        if removed:
+            logger.info(f"图片生成清理：删除 {removed} 个无记录的过期图片文件")
+        return removed
 
     async def list_records(self, db):
         """返回记录列表 [{id, mode, prompt, created_at, expires_at, ...}]，按创建时间倒序。"""
@@ -331,17 +424,29 @@ class ImageGenManager:
             return {key: value for key, value in row._mapping.items()}
 
     async def delete_record(self, db, record_id: int):
-        """删除记录并清理本地文件，返回布尔是否删除成功。"""
+        """删除记录并清理本地图片文件（真删）。
+
+        Args:
+            db: AstrBot 的数据库对象。
+            record_id: 记录 id。
+
+        Returns:
+            是否删除成功。文件删不掉时返回 False 并保留记录，
+            避免留下看不见的孤儿文件。
+        """
         await self.ensure_table(db)
         found = await self.get_record(db, record_id)
         if not found:
             return False
         image_path = found.get("image_path")
-        try:
-            if image_path and os.path.exists(image_path):
-                os.remove(image_path)
-        except OSError as e:
-            logger.warning(f"删除图片文件失败 {image_path}: {e}")
+        if image_path:
+            path = Path(image_path)
+            if path.exists():
+                try:
+                    await asyncio.to_thread(path.unlink)
+                except OSError as e:
+                    logger.warning(f"删除图片文件失败，保留记录 {image_path}: {e}")
+                    return False
         await self._run_sql(db, "DELETE FROM image_gen_records WHERE id = :id", {"id": int(record_id)})
         return True
 
